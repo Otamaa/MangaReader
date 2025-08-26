@@ -1725,7 +1725,6 @@ private:
 	}
 };
 
-
 class ImageLoadingDispatcher {
 public:
 	struct LoadContext {
@@ -2488,6 +2487,57 @@ public: //constructor and destructor
 		CoUninitialize();
 	}
 
+	void updateWindowTitle() {
+		std::wstring title = L"Simple Manga Reader";
+
+		if (!folders.empty() && currentFolderIndex >= 0 && currentFolderIndex < folders.size())
+		{
+			// Get current folder/archive name
+			std::wstring currentPath = folders[currentFolderIndex].dir;
+			std::wstring folderName;
+
+			try
+			{
+				std::filesystem::path path(currentPath);
+				folderName = path.filename().wstring();
+
+				// If it's empty (root directory case), use parent directory name
+				if (folderName.empty())
+				{
+					folderName = path.parent_path().filename().wstring();
+				}
+			} catch (...)
+			{
+				folderName = L"Unknown";
+			}
+
+			// Build title with folder info
+			title += L" - " + folderName;
+
+			// Add archive indicator if needed
+			if (isCurrentlyInArchive)
+			{
+				title += L" [Archive]";
+			}
+
+			// Add progress info if images are loaded
+			if (!currentImages.empty())
+			{
+				title += L" (" + std::to_wstring(currentImageIndex + 1) +
+					L"/" + std::to_wstring(currentImages.size()) + L")";
+			}
+
+			// Add folder progress
+			if (folders.size() > 1)
+			{
+				title += L" [" + std::to_wstring(currentFolderIndex + 1) +
+					L"/" + std::to_wstring(folders.size()) + L"]";
+			}
+		}
+
+		window.setTitle(title);
+	}
+
 	void initializeButtons() {
 		UIButton::ButtonConfig infoConfig;
 		infoConfig.text = "i";
@@ -2585,6 +2635,7 @@ public: //constructor and destructor
 									showHelpText = helpVisible;
 								}
 
+								updateWindowTitle();
 								return; // Successfully restored session
 							}
 						}
@@ -2651,6 +2702,7 @@ public: //constructor and destructor
 				if (!currentImages.empty() && loadCurrentImage())
 				{
 					foundWorkingFolder = true;
+					updateWindowTitle();
 				}
 			} catch (...)
 			{
@@ -3082,6 +3134,7 @@ public: //loads
 			if (!currentImages.empty())
 			{
 				loadAllImagesInFolder();
+				updateWindowTitle();
 			}
 			else
 			{
@@ -3207,6 +3260,7 @@ public: //loads
 			if (loaded)
 			{
 				setupTextureFromImage(imageData);
+				updateWindowTitle();
 				return true;
 			}
 
@@ -3221,6 +3275,7 @@ public: //loads
 			{
 
 				setupTextureFromImage(loadedImages[currentImageIndex].image);
+				updateWindowTitle();
 				return true;
 			}
 		}
@@ -3244,6 +3299,7 @@ public: //loads
 		if (loaded)
 		{
 			setupTextureFromImage(imageData);
+			updateWindowTitle();
 			return true;
 		}
 
@@ -3604,6 +3660,7 @@ public: //navigations and inputs
 			{
 				currentImageIndex = 0;
 				loadCurrentImage();
+				updateWindowTitle();
 			}
 			else
 			{
