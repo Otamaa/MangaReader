@@ -16,6 +16,8 @@
 #include <locale>
 #include <future>
 #include <fstream>
+#include <map>
+#include <shared_mutex>
 
 // Define SFML_STATIC if not already defined (for static linking)
 #ifndef SFML_STATIC
@@ -311,6 +313,14 @@ RECT LockedMessageBox::originalWindowRect = { 0, 0, 0, 0 };
 // Unicode utility functions
 class UnicodeUtils {
 public:
+
+	static std::string trim(const std::string& str) {
+		size_t first = str.find_first_not_of(' ');
+		if (first == std::string::npos) return "";
+		size_t last = str.find_last_not_of(' ');
+		return str.substr(first, (last - first + 1));
+	}
+
 	static std::wstring stringToWstring(const std::string& str) {
 		if (str.empty()) return std::wstring();
 
@@ -350,6 +360,14 @@ private:
 public:
 
 	sf_text_wrapper() = default;
+
+	// Delete copy constructor and copy assignment (unique_ptr is not copyable)
+	sf_text_wrapper(const sf_text_wrapper&) = delete;
+	sf_text_wrapper& operator=(const sf_text_wrapper&) = delete;
+
+	// Add move constructor and move assignment
+	sf_text_wrapper(sf_text_wrapper&&) = default;
+	sf_text_wrapper& operator=(sf_text_wrapper&&) = default;
 
 	void initialize(const sf::Font& font, unsigned int size) {
 		text = std::make_unique<sf::Text>(font, "null", size);
@@ -435,123 +453,6 @@ std::string wrapText(const std::string& str, const sf::Font& font, unsigned int 
 	return wrapped;
 }
 
-// Info Button Class
-class InfoButton {
-private:
-	sf::RectangleShape button;
-	sf::CircleShape infoIcon;
-	sf_text_wrapper buttonText;
-	bool isInfoVisible;
-	sf::Vector2f buttonPosition;  // Store position for easier access
-	float buttonSize;             // Store size for easier access
-
-public:
-	InfoButton() : button(), infoIcon(), buttonText(), isInfoVisible(false), buttonPosition(), buttonSize(30.0f) { }
-
-	void initialize(const sf::Font& font, float x, float y, float size = 30.0f) {
-		// Setup button (small circular button)
-		button.setSize(sf::Vector2f(size, size));
-		button.setPosition(sf::Vector2f(x, y));
-		button.setFillColor(sf::Color(70, 130, 180, 200)); // Semi-transparent steel blue
-		button.setOutlineThickness(1);
-		button.setOutlineColor(sf::Color::White);
-
-		// Setup info icon (circle background)
-		infoIcon.setRadius(size / 2 - 3);
-		infoIcon.setPosition(sf::Vector2f(x + 3, y + 3));
-		infoIcon.setFillColor(sf::Color(255, 255, 255, 180));
-
-		// Setup "i" text on button
-		buttonText.initialize(font, static_cast<unsigned int>(size - 8));
-		buttonText.get()->setString("i");
-		buttonText.get()->setFillColor(sf::Color(70, 130, 180));
-		buttonText.get()->setPosition(sf::Vector2f(x + size / 2 - 4, y + size / 2 - 12));
-		buttonText.get()->setStyle(sf::Text::Bold);  // Make text bold for better visibility
-
-		// Center the text better
-		sf::FloatRect textBounds = buttonText.get()->getLocalBounds();
-		buttonText.get()->setPosition(sf::Vector2f(
-			x + (size - textBounds.size.x) / 2 - textBounds.position.x,
-			y + (size - textBounds.size.y) / 2 - textBounds.position.y)
-		);
-	}
-
-	// Update button position (useful for window resizing)
-	void updatePosition(float x, float y) {
-		buttonPosition = sf::Vector2f(x, y);
-		button.setPosition(buttonPosition);
-		infoIcon.setPosition(sf::Vector2f(x + 4, y + 4));
-
-		// Recenter text
-		sf::FloatRect textBounds = buttonText.get()->getLocalBounds();
-		buttonText.get()->setPosition(sf::Vector2f(
-			x + (buttonSize - textBounds.size.x) / 2 - textBounds.position.x,
-			y + (buttonSize - textBounds.size.y) / 2 - textBounds.position.y
-		));
-	}
-
-	bool isClickedExpanded(sf::Vector2f mousePos, float expandBy = 5.0f) {
-		sf::FloatRect expandedBounds = button.getGlobalBounds();
-		expandedBounds.position.x -= expandBy;
-		expandedBounds.position.y -= expandBy;
-		expandedBounds.size.x += expandBy * 2;
-		expandedBounds.size.y += expandBy * 2;
-
-		return expandedBounds.contains(mousePos);
-	}
-
-	bool isClicked(sf::Vector2f mousePos) {
-		// Use button's global bounds for click detection
-		sf::FloatRect bounds = button.getGlobalBounds();
-
-		// Add some debug output (remove in release)
-//#ifdef _DEBUG
-//		static int debugClickCount = 0;
-//		debugClickCount++;
-//		if (debugClickCount % 10 == 0)
-//		{  // Only print every 10th click to avoid spam
-//			std::cout << "Mouse pos: " << mousePos.x << ", " << mousePos.y << std::endl;
-//			std::cout << "Button bounds: " << bounds.position.x << ", " << bounds.position.y
-//				<< " to " << (bounds.position.x + bounds.size.x)
-//				<< ", " << (bounds.position.y + bounds.size.y) << std::endl;
-//			std::cout << "Contains: " << (bounds.contains(mousePos) ? "YES" : "NO") << std::endl;
-//		}
-//#endif
-
-		return bounds.contains(mousePos);
-	}
-
-	void toggleInfo() {
-		isInfoVisible = !isInfoVisible;
-
-		// Visual feedback when toggled
-		if (isInfoVisible)
-		{
-			button.setFillColor(sf::Color(100, 160, 210, 220)); // Brighter when active
-			button.setOutlineColor(sf::Color::Cyan);
-		}
-		else
-		{
-			button.setFillColor(sf::Color(70, 130, 180, 200)); // Normal color
-			button.setOutlineColor(sf::Color::White);
-		}
-	}
-
-	bool getInfoVisible() const {
-		return isInfoVisible;
-	}
-
-	sf::FloatRect getBounds() const {
-		return button.getGlobalBounds();
-	}
-
-	void draw(sf::RenderWindow& window) {
-		window.draw(button);
-		window.draw(infoIcon);
-		window.draw(*buttonText.get());
-	}
-};
-
 // Archive Entry Structure
 struct ArchiveEntry {
 	std::string name;
@@ -559,6 +460,7 @@ struct ArchiveEntry {
 	int index; // Index in archive
 };
 
+//TODO : L".tif", L".tiff"
 static constexpr std::array<const char*, 7u> supportedExtensions = {
 	".jpg", ".jpeg", ".png", ".bmp", ".tga", ".gif", ".webp"
 };
@@ -580,6 +482,333 @@ bool IsImgExtValid(const std::string& ext) {
 
 	return false;
 }
+
+class ErrorDisplayHelper {
+public:
+	enum class ErrorType {
+		CRITICAL,
+		WARNING,
+		INFO,
+		MEMORY,
+		CORRUPTION
+	};
+
+	struct ErrorContext {
+		std::wstring archivePath;
+		std::string operation;
+		std::string details;
+		size_t memorySize = 0;
+		int entryIndex = -1;
+		std::string fileName;
+
+		ErrorContext& setArchive(const std::wstring& path) { archivePath = path; return *this; }
+		ErrorContext& setOperation(const std::string& op) { operation = op; return *this; }
+		ErrorContext& setDetails(const std::string& det) { details = det; return *this; }
+		ErrorContext& setMemorySize(size_t size) { memorySize = size; return *this; }
+		ErrorContext& setEntry(int index, const std::string& file) {
+			entryIndex = index;
+			fileName = file;
+			return *this;
+		}
+	};
+
+	static void showError(ErrorType type, const ErrorContext& context) {
+		std::wstring message;
+		std::wstring title;
+
+		switch (type)
+		{
+		case ErrorType::CRITICAL:
+			message = L"CRITICAL ARCHIVE ERROR\n\n";
+			title = L"Archive Error";
+			break;
+		case ErrorType::WARNING:
+			message = L"ARCHIVE ERROR (Skipping):\n\n";
+			title = L"Archive Skipped";
+			break;
+		case ErrorType::MEMORY:
+			message = L"MEMORY ERROR\n\n";
+			title = L"Memory Error";
+			appendMemoryInfo(message, context);
+			break;
+		case ErrorType::CORRUPTION:
+			message = L"IMAGE CORRUPTION DETECTED\n\n";
+			title = L"Image Corruption";
+			appendCorruptionInfo(message, context);
+			break;
+		}
+
+		// Common fields
+		if (!context.archivePath.empty())
+		{
+			message += L"Archive: " + context.archivePath + L"\n";
+		}
+		if (!context.operation.empty())
+		{
+			message += L"Operation: " + UnicodeUtils::stringToWstring(context.operation) + L"\n";
+		}
+		if (!context.details.empty())
+		{
+			message += L"Error: " + UnicodeUtils::stringToWstring(context.details) + L"\n\n";
+		}
+
+		// Type-specific suffixes
+		switch (type)
+		{
+		case ErrorType::CRITICAL:
+			message += L"This archive may be corrupted or incompatible.";
+			LockedMessageBox::showError(message, title);
+			break;
+		case ErrorType::WARNING:
+			message += L"This archive will be skipped and the next one will be tried.";
+			LockedMessageBox::showWarning(message, title);
+			break;
+		default:
+			LockedMessageBox::showWarning(message, title);
+			break;
+		}
+	}
+
+private:
+	static void appendMemoryInfo(std::wstring& message, const ErrorContext& context) {
+		if (context.memorySize > 0)
+		{
+			message += L"Requested Size: " + std::to_wstring(context.memorySize / 1024 / 1024) + L" MB\n\n";
+		}
+
+		MEMORYSTATUSEX memInfo;
+		memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+		if (GlobalMemoryStatusEx(&memInfo))
+		{
+			message += L"Available Memory: " + std::to_wstring(memInfo.ullAvailPhys / 1024 / 1024) + L" MB\n";
+			message += L"Total Memory: " + std::to_wstring(memInfo.ullTotalPhys / 1024 / 1024) + L" MB\n\n";
+		}
+
+		message += L"The image is too large or system is low on memory.\n";
+		message += L"Try closing other applications or skip this image.";
+	}
+
+	static void appendCorruptionInfo(std::wstring& message, const ErrorContext& context) {
+		if (!context.fileName.empty())
+		{
+			message += L"Image: " + UnicodeUtils::stringToWstring(context.fileName) + L"\n";
+		}
+		if (context.entryIndex >= 0)
+		{
+			message += L"Entry Index: " + std::to_wstring(context.entryIndex) + L"\n\n";
+		}
+		message += L"This image appears to be corrupted and will be skipped.";
+	}
+};
+
+class ImageLoader {
+public:
+	struct LoadResult {
+		sf::Image image;
+		bool success;
+		std::string errorMessage;
+
+		LoadResult() : image() , success(false) { }
+		LoadResult(sf::Image img) : image(std::move(img)), success(true) { }
+		LoadResult(const std::string& error) : image(), success(false), errorMessage(error) { }
+	};
+
+	// Unified image loading from file or memory
+	static LoadResult loadImage(const std::wstring& filePath) {
+		try
+		{
+			sf::Image image;
+			std::string filename = UnicodeUtils::wstringToString(filePath);
+
+			if (isWebPFile(filename))
+			{
+				if (loadWebPFromFile(filePath, image))
+				{
+					return LoadResult(std::move(image));
+				}
+			}
+			else
+			{
+				if (image.loadFromFile(filePath))
+				{
+					return LoadResult(std::move(image));
+				}
+			}
+			return LoadResult("Failed to load image: " + filename);
+		} catch (const std::exception& e)
+		{
+			return LoadResult("Exception loading image: " + std::string(e.what()));
+		}
+	}
+
+	static LoadResult loadImageFromMemory(const std::vector<uint8_t>& data, const std::string& filename) {
+		try
+		{
+			sf::Image image;
+
+			if (isWebPFile(filename))
+			{
+				if (loadWebPFromMemory(data, image))
+				{
+					return LoadResult(std::move(image));
+				}
+			}
+			else
+			{
+				if (image.loadFromMemory(data.data(), data.size()))
+				{
+					return LoadResult(std::move(image));
+				}
+			}
+			return LoadResult("Failed to decode image data: " + filename);
+		} catch (const std::exception& e)
+		{
+			return LoadResult("Exception decoding image: " + std::string(e.what()));
+		}
+	}
+
+	static bool isWebPFile(const std::string& filename) {
+		std::filesystem::path path(filename);
+		std::string extension = path.extension().string();
+		std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+		return extension == ".webp";
+	}
+
+	// These would be your existing WebP loading functions - kept here for completeness
+	static bool loadWebPFromFile(const std::wstring& filePath, sf::Image& image, int sizeLimit = 100 * 1024 * 1024) {
+
+		try
+		{
+			std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+
+			if (!file.is_open() || !file.good())
+			{
+				throw std::runtime_error("Failed to open WebP file: " + UnicodeUtils::wstringToString(filePath));
+			}
+
+			std::streamsize size = file.tellg();
+			if (size <= 0)
+			{
+				file.close();
+				throw std::runtime_error("WebP file is empty or invalid size: " + UnicodeUtils::wstringToString(filePath));
+			}
+
+			if (size >= sizeLimit)
+			{
+				file.close();
+				throw std::runtime_error("WebP file too large (>100MB): " + UnicodeUtils::wstringToString(filePath));
+			}
+
+			file.seekg(0, std::ios::beg);
+			if (!file.good())
+			{
+				file.close();
+				throw std::runtime_error("Failed to seek in WebP file: " + UnicodeUtils::wstringToString(filePath));
+			}
+
+			std::vector<uint8_t> buffer(static_cast<size_t>(size));
+			if (!file.read(reinterpret_cast<char*>(buffer.data()), size) || file.gcount() != size)
+			{
+				file.close();
+				throw std::runtime_error("Failed to read WebP file completely: " + UnicodeUtils::wstringToString(filePath));
+			}
+
+			file.close();
+
+			if (!loadWebPFromMemory(buffer, image))
+			{
+				throw std::runtime_error("Failed to decode WebP data: " + UnicodeUtils::wstringToString(filePath));
+			}
+
+			return true;
+
+		} catch (const std::exception& e)
+		{
+			throw std::runtime_error("WebP loading error: " + std::string(e.what()));
+		}
+	}
+
+	static bool loadWebPFromMemory(const std::vector<uint8_t>& data, sf::Image& image) {
+		int width, height;
+
+		uint8_t* decoded = WebPDecodeRGBA(data.data(), data.size(), &width, &height);
+
+		if (!decoded)
+		{
+			return false;
+		}
+
+		image = sf::Image(sf::Vector2u(width, height), decoded);
+		WebPFree(decoded);
+
+		return true;
+	}
+
+};
+
+class NavigationHelper {
+public:
+	static bool canNavigate(const NavigationLockManager& navLock) {
+		return navLock.isNavigationAllowed() && !LockedMessageBox::isActive();
+	}
+
+	static bool executeIfNavigationAllowed(const NavigationLockManager& navLock,
+		const std::function<void()>& action) {
+		if (canNavigate(navLock))
+		{
+			action();
+			return true;
+		}
+		return false;
+	}
+};
+
+class FileSystemHelper {
+public:
+	static std::string getFileSizeString(size_t fileSize) {
+		if (fileSize < 1024)
+		{
+			return std::to_string(fileSize) + " B";
+		}
+		else if (fileSize < 1024 * 1024)
+		{
+			return std::to_string(fileSize / 1024) + " KB";
+		}
+		else
+		{
+			return std::to_string(fileSize / (1024 * 1024)) + " MB";
+		}
+	}
+
+	static std::string getFileSizeString(const std::wstring& filePath) {
+		try
+		{
+			auto fileSize = std::filesystem::file_size(filePath);
+			return getFileSizeString(static_cast<size_t>(fileSize));
+		} catch (...)
+		{
+			return "Unknown";
+		}
+	}
+
+	static std::string extractFilenameFromPath(const std::wstring& path, bool isArchive = false) {
+		if (isArchive)
+		{
+			std::string filename = UnicodeUtils::wstringToString(path);
+			size_t hashPos = filename.find('#');
+			if (hashPos != std::string::npos)
+			{
+				filename = filename.substr(hashPos + 1);
+			}
+			std::filesystem::path p(filename);
+			return p.filename().string();
+		}
+		else
+		{
+			return UnicodeUtils::getFilenameOnly(UnicodeUtils::wstringToString(path));
+		}
+	}
+};
 
 // Updated ArchiveHandler class with RAR support
 class ArchiveHandler {
@@ -621,7 +850,11 @@ public:
 			// Check if file exists and is readable
 			if (!std::filesystem::exists(path))
 			{
-				showCriticalError("File Check", "Archive file does not exist: " + archivePath);
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("File Check")
+					.setDetails("Archive file does not exist: " + archivePath));
 				return false;
 			}
 
@@ -629,14 +862,22 @@ public:
 			auto fileSize = std::filesystem::file_size(path);
 			if (fileSize == 0)
 			{
-				showCriticalError("File Check", "Archive file is empty");
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("File Check")
+					.setDetails("Archive file is empty"));
 				return false;
 			}
 
 			archive = archive_read_new();
 			if (!archive)
 			{
-				showCriticalError("Archive Creation", "Failed to create archive object");
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("Archive Creation")
+					.setDetails("Failed to create archive object"));
 				return false;
 			}
 
@@ -672,7 +913,11 @@ public:
 				{
 					errorMsg += "\nLibarchive error: " + std::string(archive_error_string(archive));
 				}
-				showCriticalError("Archive Opening", errorMsg);
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("Archive Opening")
+					.setDetails(errorMsg));
 				closeArchiveInternal();
 				return false;
 			}
@@ -689,17 +934,29 @@ public:
 
 		} catch (const std::filesystem::filesystem_error& e)
 		{
-			showCriticalError("Filesystem Error", e.what());
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("Filesystem Error")
+				.setDetails(e.what()));
 			closeArchiveInternal();
 			return false;
 		} catch (const std::exception& e)
 		{
-			showCriticalError("Exception in openArchive", e.what());
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("Exception in openArchive")
+				.setDetails(e.what()));
 			closeArchiveInternal();
 			return false;
 		} catch (...)
 		{
-			showCriticalError("Unknown Exception", "Unknown exception occurred in openArchive");
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("Unknown Exception")
+				.setDetails("Unknown exception occurred in openArchive"));
 			closeArchiveInternal();
 			return false;
 		}
@@ -769,7 +1026,11 @@ public:
 			}
 		} catch (const std::exception& e)
 		{
-			showCriticalError("clearCache", e.what());
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("clearCache")
+				.setDetails(e.what()));
 		}
 	}
 
@@ -788,7 +1049,11 @@ public:
 				std::string error = "Invalid extraction parameters. Index: " + std::to_string(entryIndex) +
 					", Archive open: " + (isArchiveOpen ? "true" : "false") +
 					", Entries: " + std::to_string(imageEntries.size());
-				showCriticalError("Parameter Validation", error);
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("Parameter Validation")
+					.setDetails(error));
 				return false;
 			}
 
@@ -814,7 +1079,10 @@ public:
 			if (!extractAndCacheImageInternal(entryIndex))
 			{
 				corruptedEntries.insert(entryIndex); // Mark as corrupted
-				showCorruptionError(entryIndex, imageEntries[entryIndex].name);
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CORRUPTION,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setEntry(entryIndex, imageEntries[entryIndex].name));
 				return false;
 			}
 
@@ -825,78 +1093,41 @@ public:
 				return true;
 			}
 
-			showCriticalError("Cache Error", "Cache is empty after successful extraction for entry: " + std::to_string(entryIndex));
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("Cache Error")
+				.setDetails("Cache is empty after successful extraction for entry: " + std::to_string(entryIndex)));
 			return false;
 
 		} catch (const std::bad_alloc& e)
 		{
 			corruptedEntries.insert(entryIndex);
-			showMemoryError("extractImageToMemory", 0);
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::MEMORY,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("extractImageToMemory")
+				.setMemorySize(0));
 			return false;
 		} catch (const std::exception& e)
 		{
 			corruptedEntries.insert(entryIndex);
-			showCriticalError("extractImageToMemory Exception",
-				"Entry: " + std::to_string(entryIndex) + " - " + e.what());
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("extractImageToMemory Exception")
+				.setDetails("Entry: " + std::to_string(entryIndex) + " - " + e.what()));
 			return false;
 		} catch (...)
 		{
 			corruptedEntries.insert(entryIndex);
-			showCriticalError("extractImageToMemory Unknown Exception",
-				"Unknown exception for entry: " + std::to_string(entryIndex));
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("extractImageToMemory Unknown Exception")
+				.setDetails("Unknown exception for entry: " + std::to_string(entryIndex)));
 			return false;
 		}
-	}
-
-	void showCriticalError(const std::string& operation, const std::string& error) {
-		std::wstring message = L"CRITICAL ARCHIVE ERROR\n\n";
-		message += L"Archive: " + archivePathW + L"\n";
-		message += L"Operation: " + UnicodeUtils::stringToWstring(operation) + L"\n";
-		message += L"Error: " + UnicodeUtils::stringToWstring(error) + L"\n\n";
-		message += L"This archive may be corrupted or incompatible.";
-
-		LockedMessageBox::showError(message, L"Archive Error");
-	}
-
-	void showNonCriticalError(const std::string& operation, const std::string& error) {
-		std::wstring message = L"ARCHIVE ERROR (Skipping):\n\n";
-		message += L"Archive: " + archivePathW + L"\n";
-		message += L"Operation: " + UnicodeUtils::stringToWstring(operation) + L"\n";
-		message += L"Error: " + UnicodeUtils::stringToWstring(error) + L"\n\n";
-		message += L"This archive will be skipped and the next one will be tried.";
-
-		LockedMessageBox::showWarning(message, L"Archive Skipped");
-	}
-
-	void showMemoryError(const std::string& operation, size_t requestedSize) {
-		std::wstring message = L"MEMORY ERROR\n\n";
-		message += L"Archive: " + archivePathW + L"\n";
-		message += L"Operation: " + UnicodeUtils::stringToWstring(operation) + L"\n";
-		message += L"Requested Size: " + std::to_wstring(requestedSize / 1024 / 1024) + L" MB\n\n";
-
-		// Get current memory info
-		MEMORYSTATUSEX memInfo;
-		memInfo.dwLength = sizeof(MEMORYSTATUSEX);
-		if (GlobalMemoryStatusEx(&memInfo))
-		{
-			message += L"Available Memory: " + std::to_wstring(memInfo.ullAvailPhys / 1024 / 1024) + L" MB\n";
-			message += L"Total Memory: " + std::to_wstring(memInfo.ullTotalPhys / 1024 / 1024) + L" MB\n\n";
-		}
-
-		message += L"The image is too large or system is low on memory.\n";
-		message += L"Try closing other applications or skip this image.";
-
-		LockedMessageBox::showWarning(message, L"Memory Error");
-	}
-
-	void showCorruptionError(int entryIndex, const std::string& fileName) {
-		std::wstring message = L"IMAGE CORRUPTION DETECTED\n\n";
-		message += L"Archive: " + archivePathW + L"\n";
-		message += L"Image: " + UnicodeUtils::stringToWstring(fileName) + L"\n";
-		message += L"Entry Index: " + std::to_wstring(entryIndex) + L"\n\n";
-		message += L"This image appears to be corrupted and will be skipped.";
-
-		LockedMessageBox::showWarning(message, L"Image Corruption");
 	}
 
 	bool isSafeToAllocate(size_t requestedSize) {
@@ -905,7 +1136,11 @@ public:
 
 		if (requestedSize > MAX_SINGLE_ALLOCATION)
 		{
-			showMemoryError("Size Check", requestedSize);
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::MEMORY,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("Size Check")
+				.setMemorySize(requestedSize));
 			return false;
 		}
 
@@ -915,7 +1150,11 @@ public:
 		{
 			if (memInfo.ullAvailPhys < (requestedSize + MIN_FREE_MEMORY))
 			{
-				showMemoryError("Memory Check", requestedSize);
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::MEMORY,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("Memory Check")
+					.setMemorySize(requestedSize));
 				return false;
 			}
 		}
@@ -934,7 +1173,11 @@ public:
 			return std::vector<uint8_t>(size);
 		} catch (const std::bad_alloc& e)
 		{
-			showMemoryError("Vector Allocation", size);
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("Vector Allocation")
+				.setDetails(e.what()));
 			throw;
 		}
 	}
@@ -1152,11 +1395,19 @@ private:
 
 		} catch (const std::exception& e)
 		{
-			showCriticalError("loadImageEntries Exception", e.what());
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("loadImageEntries Exception")
+				.setDetails(e.what()));
 			return false;
 		} catch (...)
 		{
-			showCriticalError("loadImageEntries", "Unknown exception occurred");
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("loadImageEntries")
+				.setDetails("Unknown exception occurred"));
 			return false;
 		}
 	}
@@ -1279,7 +1530,11 @@ private:
 			if (!archive)
 			{
 				isArchiveOpen = false;
-				showCriticalError("Archive Reopen", "Failed to create new archive object for extraction");
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("Archive Reopen")
+					.setDetails("Failed to create new archive object for extraction"));
 				return false;
 			}
 
@@ -1294,7 +1549,11 @@ private:
 				{
 					errorMsg += ": " + std::string(archive_error_string(archive));
 				}
-				showCriticalError("Archive Reopen", errorMsg);
+				ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+					ErrorDisplayHelper::ErrorContext()
+					.setArchive(archivePathW)
+					.setOperation("Archive Reopen")
+					.setDetails(errorMsg));
 				archive_read_free(archive);
 				archive = nullptr;
 				isArchiveOpen = false;
@@ -1347,7 +1606,11 @@ private:
 						// This is our target image - extract it
 						if (size > 500 * 1024 * 1024)
 						{
-							showMemoryError("Image Too Large", static_cast<size_t>(size));
+							ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::MEMORY,
+								ErrorDisplayHelper::ErrorContext()
+								.setArchive(archivePathW)
+								.setOperation("Image Too Large")
+								.setMemorySize(static_cast<size_t>(size)));
 							break;
 						}
 
@@ -1380,7 +1643,11 @@ private:
 								{
 									error += " - " + std::string(archive_error_string(archive));
 								}
-								showCriticalError("Archive Read Error", error);
+								ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+									ErrorDisplayHelper::ErrorContext()
+									.setArchive(archivePathW)
+									.setOperation("Archive Read Error")
+									.setDetails(error));
 								cachedImages[targetIndex].clear();
 							}
 							else
@@ -1388,12 +1655,20 @@ private:
 								std::string error = "Partial read for: " + currentPath +
 									". Expected: " + std::to_string(size) +
 									", Got: " + std::to_string(bytesRead);
-								showCriticalError("Partial Read", error);
+								ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+									ErrorDisplayHelper::ErrorContext()
+									.setArchive(archivePathW)
+									.setOperation("Partial Read")
+									.setDetails(error));
 								cachedImages[targetIndex].clear();
 							}
 						} catch (const std::bad_alloc& e)
 						{
-							showMemoryError("Allocation Failed", static_cast<size_t>(size));
+							ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::MEMORY,
+								ErrorDisplayHelper::ErrorContext()
+								.setArchive(archivePathW)
+								.setOperation("Allocation Failed")
+								.setMemorySize(static_cast<size_t>(size)));
 							cachedImages[targetIndex].clear();
 							found = false;
 						}
@@ -1432,14 +1707,91 @@ private:
 
 		} catch (const std::exception& e)
 		{
-			showCriticalError("extractAndCacheImageInternal Exception", e.what());
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("extractAndCacheImageInternal Exception")
+				.setDetails(e.what()));
 			return false;
 		} catch (...)
 		{
-			showCriticalError("extractAndCacheImageInternal", "Unknown exception occurred");
+			ErrorDisplayHelper::showError(ErrorDisplayHelper::ErrorType::CRITICAL,
+				ErrorDisplayHelper::ErrorContext()
+				.setArchive(archivePathW)
+				.setOperation("extractAndCacheImageInternal")
+				.setDetails("Unknown exception occurred"));
 			return false;
 		}
-	}};
+	}
+};
+
+
+class ImageLoadingDispatcher {
+public:
+	struct LoadContext {
+		bool isArchive;
+		ArchiveHandler* archiveHandler;
+		const std::vector<std::wstring>* currentImages;
+		int imageIndex;
+
+		LoadContext(bool archive, ArchiveHandler* handler,
+			const std::vector<std::wstring>* images, int index)
+			: isArchive(archive), archiveHandler(handler),
+			currentImages(images), imageIndex(index) { }
+	};
+
+	static ImageLoader::LoadResult loadImageAtIndex(const LoadContext& context) {
+		if (!context.currentImages || context.imageIndex < 0 ||
+			context.imageIndex >= context.currentImages->size())
+		{
+			return ImageLoader::LoadResult("Invalid image index");
+		}
+
+		if (context.isArchive && context.archiveHandler)
+		{
+			return loadFromArchive(context);
+		}
+		else
+		{
+			return loadFromFile(context);
+		}
+	}
+
+	static sf::Vector2u getImageDimensionsAtIndex(const LoadContext& context) {
+		ImageLoader::LoadResult result = loadImageAtIndex(context);
+		if (result.success)
+		{
+			return result.image.getSize();
+		}
+		return sf::Vector2u(0, 0);
+	}
+
+private:
+	static ImageLoader::LoadResult loadFromArchive(const LoadContext& context) {
+		std::vector<uint8_t> rawData;
+		if (context.archiveHandler->extractImageToMemory(context.imageIndex, rawData))
+		{
+			std::string filename = getFilenameFromArchivePath((*context.currentImages)[context.imageIndex]);
+			return ImageLoader::loadImageFromMemory(rawData, filename);
+		}
+		return ImageLoader::LoadResult("Failed to extract from archive");
+	}
+
+	static ImageLoader::LoadResult loadFromFile(const LoadContext& context) {
+		return ImageLoader::loadImage((*context.currentImages)[context.imageIndex]);
+	}
+
+	static std::string getFilenameFromArchivePath(const std::wstring& archivePath) {
+		std::string filename = UnicodeUtils::wstringToString(archivePath);
+		size_t hashPos = filename.find('#');
+		if (hashPos != std::string::npos)
+		{
+			filename = filename.substr(hashPos + 1);
+		}
+		std::filesystem::path p(filename);
+		return p.filename().string();
+	}
+};
 
 struct FoldersIdent {
 	std::wstring dir;
@@ -1449,6 +1801,542 @@ struct FoldersIdent {
 		return dir < other.dir;  // std::wstring already has operator<
 	}
 };
+
+class ConfigManager {
+private:
+	std::wstring configFilePath;
+	std::map<std::string, std::string> configData;
+
+public:
+	ConfigManager(const std::wstring& configPath = L"") : configFilePath() , configData() {
+
+		if (configPath.empty())
+		{
+			// Default to executable directory + "config.ini"
+			wchar_t exePath[MAX_PATH];
+			GetModuleFileNameW(NULL, exePath, MAX_PATH);
+			std::filesystem::path execDir = std::filesystem::path(exePath).parent_path();
+			configFilePath = (execDir / "manga_reader_config.ini").wstring();
+		}
+		else
+		{
+			configFilePath = configPath;
+		}
+		loadConfig();
+	}
+
+	~ConfigManager() {
+		saveConfig();
+	}
+
+	// Load configuration from INI file
+	bool loadConfig() {
+		configData.clear();
+
+		try
+		{
+			std::ifstream file(configFilePath);
+			if (!file.is_open())
+			{
+				// File doesn't exist yet, that's ok
+				return true;
+			}
+
+			std::string line;
+			std::string currentSection = "";
+
+			while (std::getline(file, line))
+			{
+				line = UnicodeUtils::trim(line);
+
+				// Skip empty lines and comments
+				if (line.empty() || line[0] == ';' || line[0] == '#')
+				{
+					continue;
+				}
+
+				// Check for section headers [section]
+				if (line[0] == '[' && line.back() == ']')
+				{
+					currentSection = line.substr(1, line.length() - 2);
+					continue;
+				}
+
+				// Parse key=value pairs
+				size_t equalPos = line.find('=');
+				if (equalPos != std::string::npos)
+				{
+					std::string key = UnicodeUtils::trim(line.substr(0, equalPos));
+					std::string value = UnicodeUtils::trim(line.substr(equalPos + 1));
+
+					// Remove quotes if present
+					if (value.length() >= 2 && value[0] == '"' && value.back() == '"')
+					{
+						value = value.substr(1, value.length() - 2);
+					}
+
+					// Store with section prefix if we have one
+					std::string fullKey = currentSection.empty() ? key : currentSection + "." + key;
+					configData[fullKey] = value;
+				}
+			}
+
+			file.close();
+			return true;
+
+		} catch (const std::exception& e)
+		{
+			return false;
+		}
+	}
+
+	// Save configuration to INI file
+	bool saveConfig() {
+		try
+		{
+			std::ofstream file(configFilePath);
+			if (!file.is_open())
+			{
+				return false;
+			}
+
+			file << "; Manga Reader Configuration File\n";
+			file << "; Auto-generated - modify with care\n\n";
+
+			// Group by sections
+			std::map<std::string, std::map<std::string, std::string>> sections;
+
+			for (const auto& pair : configData)
+			{
+				size_t dotPos = pair.first.find('.');
+				if (dotPos != std::string::npos)
+				{
+					std::string section = pair.first.substr(0, dotPos);
+					std::string key = pair.first.substr(dotPos + 1);
+					sections[section][key] = pair.second;
+				}
+				else
+				{
+					sections[""][pair.first] = pair.second;
+				}
+			}
+
+			// Write sections
+			for (const auto& section : sections)
+			{
+				if (!section.first.empty())
+				{
+					file << "[" << section.first << "]\n";
+				}
+
+				for (const auto& keyValue : section.second)
+				{
+					file << keyValue.first << "=" << keyValue.second << "\n";
+				}
+
+				file << "\n";
+			}
+
+			file.close();
+			return true;
+
+		} catch (const std::exception& e)
+		{
+			return false;
+		}
+	}
+
+	// Get string value
+	std::string getString(const std::string& key, const std::string& defaultValue = "") {
+		auto it = configData.find(key);
+		return (it != configData.end()) ? it->second : defaultValue;
+	}
+
+	// Get wide string value
+	std::wstring getWString(const std::string& key, const std::wstring& defaultValue = L"") {
+		std::string value = getString(key);
+		return value.empty() ? defaultValue : UnicodeUtils::stringToWstring(value);
+	}
+
+	// Get integer value
+	int getInt(const std::string& key, int defaultValue = 0) {
+		std::string value = getString(key);
+		if (value.empty()) return defaultValue;
+
+		try
+		{
+			return std::stoi(value);
+		} catch (...)
+		{
+			return defaultValue;
+		}
+	}
+
+	// Get boolean value
+	bool getBool(const std::string& key, bool defaultValue = false) {
+		std::string value = getString(key);
+		if (value.empty()) return defaultValue;
+
+		std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+		return (value == "true" || value == "1" || value == "yes" || value == "on");
+	}
+
+	// Get float value
+	float getFloat(const std::string& key, float defaultValue = 0.0f) {
+		std::string value = getString(key);
+		if (value.empty()) return defaultValue;
+
+		try
+		{
+			return std::stof(value);
+		} catch (...)
+		{
+			return defaultValue;
+		}
+	}
+
+	// Set string value
+	void setString(const std::string& key, const std::string& value) {
+		configData[key] = value;
+	}
+
+	// Set wide string value
+	void setWString(const std::string& key, const std::wstring& value) {
+		configData[key] = UnicodeUtils::wstringToString(value);
+	}
+
+	// Set integer value
+	void setInt(const std::string& key, int value) {
+		configData[key] = std::to_string(value);
+	}
+
+	// Set boolean value
+	void setBool(const std::string& key, bool value) {
+		configData[key] = value ? "true" : "false";
+	}
+
+	// Set float value
+	void setFloat(const std::string& key, float value) {
+		configData[key] = std::to_string(value);
+	}
+
+	// Check if key exists
+	bool hasKey(const std::string& key) {
+		return configData.find(key) != configData.end();
+	}
+
+	// Remove a key
+	void removeKey(const std::string& key) {
+		configData.erase(key);
+	}
+
+	// Get config file path
+	std::wstring getConfigFilePath() const {
+		return configFilePath;
+	}
+
+	// Force save config now
+	void forceSave() {
+		saveConfig();
+	}
+};
+
+enum class ButtonID {
+	INFO_BUTTON,
+	PREVIOUS_FOLDER,
+	NEXT_FOLDER,
+	SETTINGS_BUTTON,  // New button
+	HELP_BUTTON,
+	COUNT
+};
+
+class UIButton {
+public:
+	struct ButtonConfig {
+		std::string text = "?";
+		sf::Color backgroundColor = sf::Color(100, 100, 100, 200);
+		sf::Color textColor = sf::Color::White;
+		sf::Color outlineColor = sf::Color::White;
+		sf::Color disabledBgColor = sf::Color(60, 60, 60, 150);
+		sf::Color disabledTextColor = sf::Color(150, 150, 150);
+		bool hasCircularBg = true;
+		unsigned int fontSize = 18;
+	};
+
+private:
+	ButtonID buttonID;
+	sf::RectangleShape button;
+	sf::CircleShape circularBg;
+	sf_text_wrapper buttonText;
+	sf::Vector2f position;
+	float size;
+	bool isEnabled;
+	bool hasToggleState;
+	bool isToggled;
+	ButtonConfig config;
+
+public:
+
+	UIButton() : buttonID(ButtonID::INFO_BUTTON), button(), circularBg(), buttonText(),
+		position(0, 0), size(30.0f), isEnabled(true), hasToggleState(false),
+		isToggled(false), config() { }
+
+	// Delete copy constructor and copy assignment
+	UIButton(const UIButton&) = delete;
+	UIButton& operator=(const UIButton&) = delete;
+
+	// Add move constructor and move assignment
+	UIButton(UIButton&&) = default;
+	UIButton& operator=(UIButton&&) = default;
+
+	void initialize(const sf::Font& font, ButtonID id, float x, float y,
+		const ButtonConfig& buttonConfig, float buttonSize = 30.0f) {
+		buttonID = id;
+		config = buttonConfig;
+		size = buttonSize;
+		position = sf::Vector2f(x, y);
+
+		// Setup button background
+		button.setSize(sf::Vector2f(size, size));
+		button.setPosition(position);
+		button.setOutlineThickness(1);
+
+		// Setup circular background if needed
+		if (config.hasCircularBg)
+		{
+			circularBg.setRadius(size / 2 - 3);
+			circularBg.setPosition(sf::Vector2f(x + 3, y + 3));
+		}
+
+		// Setup text
+		buttonText.initialize(font, config.fontSize);
+		buttonText.get()->setString(config.text);
+		buttonText.get()->setStyle(sf::Text::Bold);
+
+		// Set initial appearance
+		updateAppearance();
+		centerText();
+	}
+
+	void updatePosition(float x, float y) {
+		position = sf::Vector2f(x, y);
+		button.setPosition(position);
+
+		if (config.hasCircularBg)
+		{
+			circularBg.setPosition(sf::Vector2f(x + 3, y + 3));
+		}
+
+		centerText();
+	}
+
+	void setEnabled(bool enabled) {
+		isEnabled = enabled;
+		updateAppearance();
+	}
+
+	void setToggleState(bool canToggle, bool initialState = false) {
+		hasToggleState = canToggle;
+		isToggled = initialState;
+		updateAppearance();
+	}
+
+	void toggle() {
+		if (hasToggleState)
+		{
+			isToggled = !isToggled;
+			updateAppearance();
+		}
+	}
+
+	bool isClicked(sf::Vector2f mousePos, float expandBy = 5.0f) const {
+		if (!isEnabled) return false;
+
+		sf::FloatRect bounds = button.getGlobalBounds();
+		bounds.position.x -= expandBy;
+		bounds.position.y -= expandBy;
+		bounds.size.x += expandBy * 2;
+		bounds.size.y += expandBy * 2;
+
+		return bounds.contains(mousePos);
+	}
+
+	// Getters
+	ButtonID getID() const { return buttonID; }
+	bool getIsEnabled() const { return isEnabled; }
+	bool getIsToggled() const { return isToggled; }
+	sf::Vector2f getPosition() const { return position; }
+	float getSize() const { return size; }
+	sf::FloatRect getBounds() const { return button.getGlobalBounds(); }
+
+	void draw(sf::RenderWindow& window) {
+		window.draw(button);
+		if (config.hasCircularBg)
+		{
+			window.draw(circularBg);
+		}
+		window.draw(*buttonText.get());
+	}
+
+private:
+	void updateAppearance() {
+		if (isEnabled)
+		{
+			if (hasToggleState && isToggled)
+			{
+				// Toggled state (brighter/different color)
+				button.setFillColor(sf::Color(100, 160, 210, 220));
+				button.setOutlineColor(sf::Color::Cyan);
+				if (config.hasCircularBg)
+				{
+					circularBg.setFillColor(sf::Color(200, 230, 255, 180));
+				}
+				buttonText.get()->setFillColor(sf::Color(70, 130, 180));
+			}
+			else
+			{
+				// Normal enabled state
+				button.setFillColor(config.backgroundColor);
+				button.setOutlineColor(config.outlineColor);
+				if (config.hasCircularBg)
+				{
+					circularBg.setFillColor(sf::Color(255, 255, 255, 180));
+				}
+				buttonText.get()->setFillColor(config.textColor);
+			}
+		}
+		else
+		{
+			// Disabled state
+			button.setFillColor(config.disabledBgColor);
+			button.setOutlineColor(sf::Color(120, 120, 120));
+			if (config.hasCircularBg)
+			{
+				circularBg.setFillColor(sf::Color(200, 200, 200, 100));
+			}
+			buttonText.get()->setFillColor(config.disabledTextColor);
+		}
+	}
+
+	void centerText() {
+		sf::FloatRect textBounds = buttonText.get()->getLocalBounds();
+		buttonText.get()->setPosition(sf::Vector2f(
+			position.x + (size - textBounds.size.x) / 2 - textBounds.position.x,
+			position.y + (size - textBounds.size.y) / 2 - textBounds.position.y
+		));
+	}
+};
+
+class UIButtonManager {
+private:
+	std::vector<std::unique_ptr<UIButton>> buttons;
+	std::map<ButtonID, size_t> buttonIndexMap;
+	mutable std::shared_mutex buttonMutex;
+public:
+	UIButtonManager() : buttons(), buttonIndexMap(), buttonMutex() { buttons.reserve(10); }
+
+	UIButton* getButtonInternal(ButtonID id) {
+		auto it = buttonIndexMap.find(id);
+		return (it != buttonIndexMap.end()) ? buttons[it->second].get() : nullptr;
+	}
+
+	void addButton(const sf::Font& font, ButtonID id, float x, float y,
+		const UIButton::ButtonConfig& config, float size = 30.0f) {
+		std::unique_lock<std::shared_mutex> lock(buttonMutex);
+		size_t index = buttons.size();
+		auto button = std::make_unique<UIButton>();
+		button->initialize(font, id, x, y, config, size);
+		buttons.push_back(std::move(button));
+		buttonIndexMap[id] = index;
+	}
+
+	template<typename Func>
+	auto withButton(ButtonID id, Func&& func) -> decltype(func(std::declval<UIButton*>())) {
+		std::shared_lock<std::shared_mutex> lock(buttonMutex);  // Shared lock for reading
+		UIButton* btn = getButtonInternal(id);
+		return func(btn);
+	}
+
+	// Get button by ID
+	UIButton* getButton(ButtonID id) {
+		std::shared_lock<std::shared_mutex> lock(buttonMutex);  // NEW: Shared lock
+		return getButtonInternal(id);
+	}
+
+	// Update all button positions (useful for window resize)
+	void updateAllPositions(const std::function<sf::Vector2f(ButtonID)>& positionCalculator) {
+		std::unique_lock<std::shared_mutex> lock(buttonMutex);  // NEW: Exclusive lock
+		for (auto& button : buttons)
+		{
+			sf::Vector2f newPos = positionCalculator(button->getID());
+			button->updatePosition(newPos.x, newPos.y);
+		}
+	}
+
+	// Check which button was clicked (returns ButtonID::COUNT if none)
+	ButtonID checkButtonClick(sf::Vector2f mousePos, float expandBy = 5.0f) {
+		std::shared_lock<std::shared_mutex> lock(buttonMutex);  // NEW: Shared lock
+		for (const auto& button : buttons)
+		{
+			if (button->isClicked(mousePos, expandBy))
+			{
+				return button->getID();
+			}
+		}
+		return ButtonID::COUNT;
+	}
+
+	// Batch operations
+	void enableButton(ButtonID id, bool enabled) {
+		withButton(id, [enabled](UIButton* btn) {
+			if (btn) btn->setEnabled(enabled);
+			return true;
+			});
+	}
+
+	void toggleButton(ButtonID id) {
+		withButton(id, [](UIButton* btn) {
+			if (btn) btn->toggle();
+			return true;
+			});
+	}
+
+	bool isButtonToggled(ButtonID id) {
+		return withButton(id, [](UIButton* btn) {
+			return btn ? btn->getIsToggled() : false;
+			});
+	}
+
+	// Render all buttons
+	void drawAll(sf::RenderWindow& window) {
+		std::shared_lock<std::shared_mutex> lock(buttonMutex);
+		for (auto& button : buttons)
+		{
+			button->draw(window);
+		}
+	}
+
+	// Get button count
+	size_t getButtonCount() const {
+		std::shared_lock<std::shared_mutex> lock(buttonMutex);
+		return buttons.size();
+	}
+
+	// Clear all buttons
+	void clear() {
+		std::unique_lock<std::shared_mutex> lock(buttonMutex);
+		buttons.clear();
+		buttonIndexMap.clear();
+	}
+};
+
+static constexpr const char* CONFIG_SECTION = "Settings";
+static constexpr const char* CONFIG_LAST_FOLDER = "Settings.lastMangaFolder";
+static constexpr const char* CONFIG_LAST_FOLDER_INDEX = "Settings.lastFolderIndex";
+static constexpr const char* CONFIG_LAST_IMAGE_INDEX = "Settings.lastImageIndex";
+static constexpr const char* CONFIG_WINDOW_WIDTH = "Settings.windowWidth";
+static constexpr const char* CONFIG_WINDOW_HEIGHT = "Settings.windowHeight";
+static constexpr const char* CONFIG_USE_SMOOTHING = "Settings.useSmoothing";
 
 class MangaReader {
 private:
@@ -1461,8 +2349,7 @@ private:
 	sf_font_wrapper font;
 	sf_text_wrapper statusText;
 	sf_text_wrapper helpText;
-	sf_text_wrapper detailedInfoText;  // New detailed info text
-	InfoButton infoButton;             // New info button
+	sf_text_wrapper detailedInfoText;
 
 	std::vector<FoldersIdent> folders;
 	std::vector<std::wstring> currentImages;
@@ -1514,9 +2401,14 @@ private:
 	ImageSizeMismatchHandler sizeMismatchHandler;
 	NavigationLockManager navLock;
 
+	UIButtonManager buttonManager;
+	std::unique_ptr<ConfigManager> config;
+
+	bool showHelpText;
+
 public: //constructor and destructor
 
-	MangaReader() : window(sf::VideoMode(sf::Vector2u(1200, 800)), "Simple Manga Reader")
+	MangaReader() : window()
 		, originalTexture()
 		, scaledTexture()
 		, currentSprite()
@@ -1524,7 +2416,6 @@ public: //constructor and destructor
 		, statusText()
 		, helpText()
 		, detailedInfoText()
-		, infoButton()
 		, folders()
 		, currentImages()
 		, currentFolderIndex(0)
@@ -1532,10 +2423,9 @@ public: //constructor and destructor
 		, scrollOffset(0.0f)
 		, zoomLevel(1.0f)
 		, imagePosition()
-		// Scaling support
 		, useSmoothing(true)
-		, lastZoomLevel()              // Track zoom changes for rescaling
-		, lastWindowSize()     // Track window size changes
+		, lastZoomLevel()
+		, lastWindowSize()
 		, showUI(true)
 		, rootMangaPath()
 		, archiveHandler()
@@ -1546,20 +2436,25 @@ public: //constructor and destructor
 		, isLoadingFolder(false)
 		, loadingProgress(0)
 		, folderLoadingFuture()
-
-		// Progress display
 		, loadingText()
-
-		// Enhanced zoom and positioning management
-		, savedZoomLevel(1.0f)          // Remember zoom level across images in same folder
-		, savedImageOffset() // Remember manual positioning offset
-		, hasCustomZoom()           // Track if user has set custom zoom
-		, hasCustomPosition()        // Track if user has manually positioned image
-		, currentView()          // Manage view properly
+		, savedZoomLevel(1.0f)
+		, savedImageOffset()
+		, hasCustomZoom()
+		, hasCustomPosition()
+		, currentView()
 		, sizeMismatchHandler()
 		, navLock()
-	{
+		, buttonManager()
+		, config()
+		, showHelpText(true) {
 
+
+		config = std::make_unique<ConfigManager>();
+
+		int savedWidth = config->getInt(CONFIG_WINDOW_WIDTH, 1200);
+		int savedHeight = config->getInt(CONFIG_WINDOW_HEIGHT, 800);
+
+		window.create(sf::VideoMode(sf::Vector2u(savedWidth, savedHeight)), "Simple Manga Reader");
 		window.setFramerateLimit(60);
 
 		// Get the native window handle and set it for our message box class
@@ -1574,7 +2469,6 @@ public: //constructor and destructor
 
 		// Initialize COM for folder dialog
 		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-		// Set console to UTF-8 for proper Unicode handling
 		SetConsoleOutputCP(CP_UTF8);
 		SetConsoleCP(CP_UTF8);
 
@@ -1583,7 +2477,145 @@ public: //constructor and destructor
 		loadingText.initialize(*font.get(), 18u);
 		loadingText.get()->setFillColor(sf::Color::White);
 
-		// Browse for manga root folder on startup
+		// Initialize configuration - this handles session restoration OR folder browsing
+		initializeConfig();
+	}
+
+	~MangaReader() {
+		saveCurrentSession();
+
+		//Cleanup COM
+		CoUninitialize();
+	}
+
+	void initializeButtons() {
+		UIButton::ButtonConfig infoConfig;
+		infoConfig.text = "i";
+		infoConfig.backgroundColor = sf::Color(70, 130, 180, 200);
+		infoConfig.textColor = sf::Color(70, 130, 180);
+		infoConfig.hasCircularBg = true;
+		infoConfig.fontSize = 22;
+
+		UIButton::ButtonConfig prevConfig;
+		prevConfig.text = "<";
+		prevConfig.backgroundColor = sf::Color(100, 100, 100, 200);
+		prevConfig.textColor = sf::Color(100, 100, 100);
+		prevConfig.hasCircularBg = true;
+		prevConfig.fontSize = 20;
+
+		UIButton::ButtonConfig nextConfig;
+		nextConfig.text = ">";
+		nextConfig.backgroundColor = sf::Color(100, 100, 100, 200);
+		nextConfig.textColor = sf::Color(100, 100, 100);
+		nextConfig.hasCircularBg = true;
+		nextConfig.fontSize = 20;
+
+		UIButton::ButtonConfig helpConfig;
+		helpConfig.text = "H";
+		helpConfig.backgroundColor = sf::Color(50, 150, 50, 200);
+		helpConfig.textColor = sf::Color(50, 150, 50);
+		helpConfig.hasCircularBg = true;
+		helpConfig.fontSize = 18;
+
+		// Calculate initial positions
+		float buttonY = 10.0f;
+		float buttonSize = 30.0f;
+		float spacing = 35.0f;
+		float infoButtonX = static_cast<float>(window.getSize().x) - 50.0f;
+
+		// Add buttons to manager
+		buttonManager.addButton(*font.get(), ButtonID::INFO_BUTTON, infoButtonX, buttonY, infoConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::NEXT_FOLDER, infoButtonX - spacing, buttonY, nextConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::PREVIOUS_FOLDER, infoButtonX - (spacing * 2), buttonY, prevConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::HELP_BUTTON, infoButtonX - (spacing * 3), buttonY, helpConfig, buttonSize);
+
+		// Set up info button as toggleable
+		buttonManager.getButton(ButtonID::INFO_BUTTON)->setToggleState(true, false);
+		buttonManager.getButton(ButtonID::HELP_BUTTON)->setToggleState(true, true);
+
+		// Update button states
+		updateNavigationButtons();
+	}
+
+	void initializeConfig() {
+		try
+		{
+			config = std::make_unique<ConfigManager>();
+
+			// Try to restore last session if config exists
+			if (config->hasKey(CONFIG_LAST_FOLDER))
+			{
+				std::wstring lastFolder = config->getWString(CONFIG_LAST_FOLDER);
+				if (!lastFolder.empty() && std::filesystem::exists(lastFolder))
+				{
+					rootMangaPath = lastFolder;
+					int lastFolderIndex = config->getInt(CONFIG_LAST_FOLDER_INDEX, 0);
+					int lastImageIndex = config->getInt(CONFIG_LAST_IMAGE_INDEX, 0);
+
+					loadFolders(rootMangaPath);
+
+					// ADD THIS: Update button states after folders are loaded
+					updateNavigationButtons();
+
+					if (!folders.empty())
+					{
+						// Clamp indices to valid ranges
+						currentFolderIndex = std::max(0, std::min(lastFolderIndex, (int)folders.size() - 1));
+
+						loadImagesFromFolder(folders[currentFolderIndex]);
+
+						if (!currentImages.empty())
+						{
+							currentImageIndex = std::max(0, std::min(lastImageIndex, (int)currentImages.size() - 1));
+							if (loadCurrentImage())
+							{
+								// Restore button states after successful restoration
+								if (config->hasKey("UI.infoButtonVisible"))
+								{
+									if (config->getBool("UI.infoButtonVisible", false))
+									{
+										buttonManager.getButton(ButtonID::INFO_BUTTON)->setToggleState(true, true);
+									}
+								}
+
+								if (config->hasKey("UI.helpButtonVisible"))
+								{
+									bool helpVisible = config->getBool("UI.helpButtonVisible", true);
+									buttonManager.getButton(ButtonID::HELP_BUTTON)->setToggleState(true, helpVisible);
+									showHelpText = helpVisible;
+								}
+
+								return; // Successfully restored session
+							}
+						}
+					}
+				}
+			}
+
+			// If restoration failed, start fresh
+			browseFolderOnStartup();
+
+		} catch (const std::exception& e)
+		{
+			// If config fails, fall back to normal startup
+			browseFolderOnStartup();
+		}
+	}
+
+	void openSettingsDialog() {
+		// Simple settings dialog for now
+		std::wstring message = L"Settings (Quick Toggle):\n\n";
+		message += L"Current Settings:\n";
+		message += L"• Smoothing: " + std::wstring(useSmoothing ? L"ON" : L"OFF") + L"\n\n";
+		message += L"Press Q to toggle smoothing\n";
+		message += L"Press R to select new manga folder\n\n";
+		message += L"More settings coming soon...";
+
+		LockedMessageBox::showInfo(message, L"Settings");
+	}
+
+
+	void browseFolderOnStartup() {
 		rootMangaPath = browseForFolder();
 		if (rootMangaPath.empty())
 		{
@@ -1593,7 +2625,6 @@ public: //constructor and destructor
 		}
 
 		loadFolders(rootMangaPath);
-
 		if (folders.empty())
 		{
 			LockedMessageBox::showError(
@@ -1604,8 +2635,15 @@ public: //constructor and destructor
 			return;
 		}
 
+		updateNavigationButtons();
+
+		// Start with first folder and image
+		currentFolderIndex = 0;
+		currentImageIndex = 0;
+
 		bool foundWorkingFolder = false;
-		for (int i = 0; i < folders.size() && !foundWorkingFolder; i++) {
+		for (int i = 0; i < folders.size() && !foundWorkingFolder; i++)
+		{
 			currentFolderIndex = i;
 			try
 			{
@@ -1616,44 +2654,139 @@ public: //constructor and destructor
 				}
 			} catch (...)
 			{
-				// Skip this folder and try the next one
 				continue;
 			}
 		}
 
-		if (!foundWorkingFolder) {
+		if (!foundWorkingFolder)
+		{
 			LockedMessageBox::showError(L"No working manga folders or archives found.", L"No Working Content");
 			window.close();
-			return;
 		}
 	}
 
-	~MangaReader() {
-		//Cleanup COM
-		CoUninitialize();
+	void saveCurrentSession() {
+		if (!config) return;
+
+		try
+		{
+			// Save current state
+			config->setWString(CONFIG_LAST_FOLDER, rootMangaPath);
+			config->setInt(CONFIG_LAST_FOLDER_INDEX, currentFolderIndex);
+			config->setInt(CONFIG_LAST_IMAGE_INDEX, currentImageIndex);
+
+			// Save window settings
+			sf::Vector2u windowSize = window.getSize();
+			config->setInt(CONFIG_WINDOW_WIDTH, windowSize.x);
+			config->setInt(CONFIG_WINDOW_HEIGHT, windowSize.y);
+
+			config->setBool(CONFIG_USE_SMOOTHING, useSmoothing);
+
+			config->setBool("UI.infoButtonVisible", buttonManager.isButtonToggled(ButtonID::INFO_BUTTON));
+			config->setBool("UI.helpButtonVisible", buttonManager.isButtonToggled(ButtonID::HELP_BUTTON));
+
+			// Force save to disk
+			config->forceSave();
+
+		} catch (const std::exception& e)
+		{
+			// Save failed, but don't interrupt user experience
+		}
+	}
+
+	void updateNavigationButtons() {
+		// Enable/disable buttons based on available folders
+		bool hasMultipleFolders = (folders.size() > 1);
+
+		buttonManager.enableButton(ButtonID::PREVIOUS_FOLDER, hasMultipleFolders);
+		buttonManager.enableButton(ButtonID::NEXT_FOLDER, hasMultipleFolders);
+	}
+
+	void updateAllButtonPositions() {
+		// Use lambda to calculate positions for each button
+		buttonManager.updateAllPositions([this](ButtonID id) -> sf::Vector2f {
+			float buttonY = 10.0f;
+			float spacing = 35.0f;
+			float infoButtonX = static_cast<float>(window.getSize().x) - 50.0f;
+
+			switch (id)
+			{
+			case ButtonID::SETTINGS_BUTTON:
+				return sf::Vector2f(infoButtonX - (spacing * 3), buttonY);
+			case ButtonID::HELP_BUTTON:
+				return sf::Vector2f(infoButtonX - (spacing * 3), buttonY);
+			case ButtonID::INFO_BUTTON:
+				return sf::Vector2f(infoButtonX, buttonY);
+			case ButtonID::NEXT_FOLDER:
+				return sf::Vector2f(infoButtonX - spacing, buttonY);
+			case ButtonID::PREVIOUS_FOLDER:
+				return sf::Vector2f(infoButtonX - (spacing * 2), buttonY);
+			default:
+				return sf::Vector2f(0, 0);
+			}
+			});
+
+		updateNavigationButtons();
+	}
+
+	void handleButtonClick(ButtonID clickedButton) {
+		switch (clickedButton)
+		{
+		case ButtonID::INFO_BUTTON:
+			buttonManager.toggleButton(ButtonID::INFO_BUTTON);
+			saveCurrentSession(); // Save when UI changes
+			break;
+
+		case ButtonID::HELP_BUTTON:
+			buttonManager.toggleButton(ButtonID::HELP_BUTTON);
+			showHelpText = buttonManager.isButtonToggled(ButtonID::HELP_BUTTON);
+			saveCurrentSession();
+			break;
+
+		case ButtonID::PREVIOUS_FOLDER:
+			if (navLock.isNavigationAllowed())
+			{
+				previousFolder();
+				saveCurrentSession(); // Save after navigation
+			}
+			break;
+
+		case ButtonID::NEXT_FOLDER:
+			if (navLock.isNavigationAllowed())
+			{
+				nextFolder();
+				saveCurrentSession(); // Save after navigation
+			}
+			break;
+		case ButtonID::SETTINGS_BUTTON:
+			// Handle settings button click
+			openSettingsDialog(); // Your settings method
+			break;
+		case ButtonID::COUNT:
+		default:
+			// No valid button clicked or unhandled button
+			break;
+		}
+	}
+
+	void updateButtonStatesExample() {
+		// Enable/disable based on conditions
+		buttonManager.enableButton(ButtonID::NEXT_FOLDER, currentFolderIndex < folders.size() - 1);
+		buttonManager.enableButton(ButtonID::PREVIOUS_FOLDER, currentFolderIndex > 0);
+
+		// Check button states
+		bool infoToggled = buttonManager.isButtonToggled(ButtonID::INFO_BUTTON);
+
+		// Get button for direct access
+		UIButton* infoBtn = buttonManager.getButton(ButtonID::INFO_BUTTON);
+		if (infoBtn)
+		{
+			sf::Vector2f pos = infoBtn->getPosition();
+			// Use position for something...
+		}
 	}
 
 public: //helpers
-
-	bool isWebPFile(const std::string& filename) {
-		std::filesystem::path path(filename);
-		std::string extension = path.extension().string();
-		std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
-		return extension == ".webp";
-	}
-
-	std::string GetFilenameForArchived(std::wstring& str) {
-		std::string filename = UnicodeUtils::wstringToString(str);
-		size_t hashPos = filename.find('#');
-		if (hashPos != std::string::npos)
-		{
-			filename = filename.substr(hashPos + 1);
-		}
-
-		// Extract just the filename from full path (handle folders)
-		std::filesystem::path p(filename);
-		return p.filename().string();
-	}
 
 	sf::Image scaleImage(const sf::Image& originalImage, sf::Vector2u newSize) {
 		sf::Vector2u originalSize = originalImage.getSize();
@@ -1733,30 +2866,6 @@ public: //helpers
 		return scaledImage;
 	}
 
-	// Get file size in a readable format
-	std::string getFileSizeString(const std::wstring& filePath) {
-		try
-		{
-			auto fileSize = std::filesystem::file_size(filePath);
-
-			if (fileSize < 1024)
-			{
-				return std::to_string(fileSize) + " B";
-			}
-			else if (fileSize < 1024 * 1024)
-			{
-				return std::to_string(fileSize / 1024) + " KB";
-			}
-			else
-			{
-				return std::to_string(fileSize / (1024 * 1024)) + " MB";
-			}
-		} catch (...)
-		{
-			return "Unknown";
-		}
-	}
-
 	// Get image dimensions as string
 	std::string getImageDimensionsString() {
 		if (originalTexture.getSize().x == 0 || originalTexture.getSize().y == 0)
@@ -1774,65 +2883,8 @@ public: //helpers
 			return sf::Vector2u(0, 0);
 		}
 
-		try
-		{
-			if (isCurrentlyInArchive)
-			{
-				// For archives, get size from archive entry info
-				const auto& entries = archiveHandler.getImageEntries();
-				if (imageIndex < entries.size())
-				{
-					// Try to extract and get dimensions quickly
-					std::vector<uint8_t> rawData;
-					if (archiveHandler.extractImageToMemory(imageIndex, rawData))
-					{
-						sf::Image tempImage;
-						std::string filename = GetFilenameForArchived(currentImages[imageIndex]);
-
-						if (isWebPFile(filename))
-						{
-							if (loadWebPFromMemory(rawData, tempImage))
-							{
-								return tempImage.getSize();
-							}
-						}
-						else
-						{
-							if (tempImage.loadFromMemory(rawData.data(), rawData.size()))
-							{
-								return tempImage.getSize();
-							}
-						}
-					}
-				}
-			}
-			else
-			{
-				// For regular files, use SFML to get dimensions quickly
-				sf::Image tempImage;
-				std::string filename = UnicodeUtils::wstringToString(currentImages[imageIndex]);
-
-				if (isWebPFile(filename))
-				{
-					if (loadWebPFromFile(currentImages[imageIndex], tempImage))
-					{
-						return tempImage.getSize();
-					}
-				}
-				else
-				{
-					if (tempImage.loadFromFile(currentImages[imageIndex]))
-					{
-						return tempImage.getSize();
-					}
-				}
-			}
-		} catch (...)
-		{
-			// Return 0,0 on any error
-		}
-
-		return sf::Vector2u(0, 0);
+		ImageLoadingDispatcher::LoadContext context(isCurrentlyInArchive, &archiveHandler, &currentImages, imageIndex);
+		return ImageLoadingDispatcher::getImageDimensionsAtIndex(context);
 	}
 
 	bool isArchiveFile(const std::string& ext) {
@@ -1880,76 +2932,8 @@ public: //loads
 			}
 		}
 
+		updateNavigationButtons(); // Update button states when folder changes
 		return false; // No working folders found
-	}
-
-	bool loadWebPFromMemory(const std::vector<uint8_t>& data, sf::Image& image) {
-		int width, height;
-
-		uint8_t* decoded = WebPDecodeRGBA(data.data(), data.size(), &width, &height);
-
-		if (!decoded)
-		{
-			return false;
-		}
-
-		image = sf::Image(sf::Vector2u(width, height), decoded);
-		WebPFree(decoded);
-
-		return true;
-	}
-
-	bool loadWebPFromFile(const std::wstring& filePath, sf::Image& image, int sizeLimit = 100 * 1024 * 1024) {
-
-		try
-		{
-			std::ifstream file(filePath, std::ios::binary | std::ios::ate);
-
-			if (!file.is_open() || !file.good())
-			{
-				throw std::runtime_error("Failed to open WebP file: " + UnicodeUtils::wstringToString(filePath));
-			}
-
-			std::streamsize size = file.tellg();
-			if (size <= 0)
-			{
-				file.close();
-				throw std::runtime_error("WebP file is empty or invalid size: " + UnicodeUtils::wstringToString(filePath));
-			}
-
-			if (size >= sizeLimit)
-			{
-				file.close();
-				throw std::runtime_error("WebP file too large (>100MB): " + UnicodeUtils::wstringToString(filePath));
-			}
-
-			file.seekg(0, std::ios::beg);
-			if (!file.good())
-			{
-				file.close();
-				throw std::runtime_error("Failed to seek in WebP file: " + UnicodeUtils::wstringToString(filePath));
-			}
-
-			std::vector<uint8_t> buffer(static_cast<size_t>(size));
-			if (!file.read(reinterpret_cast<char*>(buffer.data()), size) || file.gcount() != size)
-			{
-				file.close();
-				throw std::runtime_error("Failed to read WebP file completely: " + UnicodeUtils::wstringToString(filePath));
-			}
-
-			file.close();
-
-			if (!loadWebPFromMemory(buffer, image))
-			{
-				throw std::runtime_error("Failed to decode WebP data: " + UnicodeUtils::wstringToString(filePath));
-			}
-
-			return true;
-
-		} catch (const std::exception& e)
-		{
-			throw std::runtime_error("WebP loading error: " + std::string(e.what()));
-		}
 	}
 
 	void loadFolders(const std::wstring& path) {
@@ -2117,48 +3101,27 @@ public: //loads
 	void loadSingleImageAsync(int index) {
 		if (index < 0 || index >= currentImages.size()) return;
 
-		sf::Image image;
-		bool loaded = false;
+		ImageLoadingDispatcher::LoadContext context(isCurrentlyInArchive, &archiveHandler, &currentImages, index);
+		ImageLoader::LoadResult result = ImageLoadingDispatcher::loadImageAtIndex(context);
 
-		try
+		if (result.success)
 		{
-			if (isCurrentlyInArchive)
+			std::lock_guard<std::mutex> lock(loadingMutex);
+			loadedImages[index].image = std::move(result.image);
+			loadedImages[index].filename = FileSystemHelper::extractFilenameFromPath(currentImages[index], isCurrentlyInArchive);
+			loadedImages[index].isLoaded = true;
+
+			// Get file size
+			if (!isCurrentlyInArchive)
 			{
-				std::vector<uint8_t> rawData;
-				if (archiveHandler.extractImageToMemory(index, rawData))
+				try
 				{
-					loaded = isWebPFile(GetFilenameForArchived(currentImages[index])) ? loadWebPFromMemory(rawData, image) : image.loadFromMemory(rawData.data(), rawData.size());
+					loadedImages[index].fileSize = std::filesystem::file_size(currentImages[index]);
+				} catch (...)
+				{
+					loadedImages[index].fileSize = 0;
 				}
 			}
-			else
-			{
-				std::string filename = UnicodeUtils::wstringToString(currentImages[index]);
-				loaded = isWebPFile(filename) ? loadWebPFromFile(currentImages[index], image) : image.loadFromFile(currentImages[index]);
-			}
-
-			if (loaded)
-			{
-				std::lock_guard<std::mutex> lock(loadingMutex);
-				loadedImages[index].image = std::move(image);
-				loadedImages[index].filename = UnicodeUtils::wstringToString(
-					std::filesystem::path(currentImages[index]).filename().wstring());
-				loadedImages[index].isLoaded = true;
-
-				// Get file size
-				if (!isCurrentlyInArchive)
-				{
-					try
-					{
-						loadedImages[index].fileSize = std::filesystem::file_size(currentImages[index]);
-					} catch (...)
-					{
-						loadedImages[index].fileSize = 0;
-					}
-				}
-			}
-		} catch (const std::exception& e)
-		{
-			// Skip failed images
 		}
 	}
 
@@ -2228,19 +3191,17 @@ public: //loads
 			sf::Image imageData;
 			bool loaded = false;
 
-			if (isCurrentlyInArchive)
+			ImageLoadingDispatcher::LoadContext context(isCurrentlyInArchive, &archiveHandler, &currentImages, currentImageIndex);
+			ImageLoader::LoadResult result = ImageLoadingDispatcher::loadImageAtIndex(context);
+			if (result.success)
 			{
-				std::vector<uint8_t> rawData;
-				if (archiveHandler.extractImageToMemory(currentImageIndex, rawData))
-				{
-					std::string filename = GetFilenameForArchived(currentImages[currentImageIndex]);
-					loaded = isWebPFile(filename) ? loadWebPFromMemory(rawData, imageData) : imageData.loadFromMemory(rawData.data(), rawData.size());
-				}
+				imageData = std::move(result.image);
+				loaded = true;
 			}
 			else
 			{
-				std::string filename = UnicodeUtils::wstringToString(currentImages[currentImageIndex]);
-				loaded = isWebPFile(filename) ? loadWebPFromFile(currentImages[currentImageIndex], imageData) : imageData.loadFromFile(currentImages[currentImageIndex]);
+				loaded = false;
+				// Show error if needed: LockedMessageBox::showError(UnicodeUtils::stringToWstring(result.errorMessage), L"Image Loading Error");
 			}
 
 			if (loaded)
@@ -2267,21 +3228,17 @@ public: //loads
 		sf::Image imageData;
 		bool loaded = false;
 
-		if (isCurrentlyInArchive)
+		ImageLoadingDispatcher::LoadContext context(isCurrentlyInArchive, &archiveHandler, &currentImages, currentImageIndex);
+		ImageLoader::LoadResult result = ImageLoadingDispatcher::loadImageAtIndex(context);
+		if (result.success)
 		{
-			// Load from archive
-			std::vector<uint8_t> rawData;
-			if (archiveHandler.extractImageToMemory(currentImageIndex, rawData))
-			{
-				std::string filename = GetFilenameForArchived(currentImages[currentImageIndex]);
-				loaded = isWebPFile(filename) ? loadWebPFromMemory(rawData, imageData) : imageData.loadFromMemory(rawData.data(), rawData.size());
-			}
-
+			imageData = std::move(result.image);
+			loaded = true;
 		}
 		else
 		{
-			std::string filename = UnicodeUtils::wstringToString(currentImages[currentImageIndex]);
-			loaded = isWebPFile(filename) ? loadWebPFromFile(currentImages[currentImageIndex], imageData) : imageData.loadFromFile(currentImages[currentImageIndex]);
+			loaded = false;
+			// Show error if needed: LockedMessageBox::showError(UnicodeUtils::stringToWstring(result.errorMessage), L"Image Loading Error");
 		}
 
 		if (loaded)
@@ -2298,6 +3255,21 @@ public: //loads
 	}
 
 public://setup
+
+	void updateHelpTextPosition() {
+		if (!helpText.get()) return;
+
+		sf::Vector2u windowSize = window.getSize();
+		sf::FloatRect textBounds = helpText.get()->getLocalBounds();
+
+		// Position help text with 20px margin from bottom
+		float yPosition = static_cast<float>(windowSize.y) - textBounds.size.y - 20.0f;
+
+		// Ensure it doesn't go above the window
+		yPosition = std::max(yPosition, 200.0f);  // Keep at least 200px from top
+
+		helpText.get()->setPosition(sf::Vector2f(10.0f, yPosition));
+	}
 
 	void setupUI() {
 
@@ -2319,17 +3291,20 @@ public://setup
 			"C: Center image (keep zoom)\n"
 			"H: Toggle help\n"
 			"I: Toggle detailed info\n"
-			"R: Select new manga folder"
-			"Left Click Info Button: Toggle info"
+			"R: Select new manga folder\n"
+			"Left Click Info Button: Toggle info\n"
+			"Navigation Buttons: < (prev folder) > (next folder) Info"
 		);
+
+		updateHelpTextPosition();
 
 		// Setup detailed info text
 		detailedInfoText.initialize(*font.get(), 14u);
 		detailedInfoText.get()->setFillColor(sf::Color::Cyan);
 		detailedInfoText.get()->setPosition(sf::Vector2f(10.0f, 120.0f)); // Below status text
 
-		// Setup info button (top-right corner with some padding)
-		updateInfoButtonPosition();
+		// Initialize UI button positions
+		initializeButtons();
 	}
 
 	void handleZoom(float zoomDelta) {
@@ -2421,8 +3396,12 @@ public://setup
 		currentView.setCenter({ static_cast<float>(newSize.x) / 2.0f, static_cast<float>(newSize.y) / 2.0f });
 		window.setView(currentView);
 
-		// Update UI positions
-		updateInfoButtonPosition();
+		// Update all button positions in batch
+		updateAllButtonPositions();
+
+		updateHelpTextPosition();
+
+		// Update help text position
 		helpText.get()->setPosition(sf::Vector2f(10.0f, static_cast<float>(newSize.y) - 180.0f));
 
 		// Refit image with current zoom preferences
@@ -2435,21 +3414,6 @@ public://setup
 	}
 
 public: //update funcs
-
-	void updateInfoButtonPosition() {
-		float buttonX = static_cast<float>(window.getSize().x) - 50.0f;  // More padding from edge
-		float buttonY = 10.0f;
-
-		static bool infoButtonInitialized = { false };
-
-		if (!infoButtonInitialized)
-		{
-			infoButton.initialize(*this->font.get(), buttonX, buttonY);
-			infoButtonInitialized = true;
-		}
-
-		infoButton.updatePosition(buttonX, buttonY);
-	}
 
 	void updateSavedOffset() {
 		sf::Vector2u windowSize = window.getSize();
@@ -2564,21 +3528,8 @@ public: //update funcs
 					extension = std::filesystem::path(fileName).extension().string();
 				}
 				const auto& entries = archiveHandler.getImageEntries();
-				if (currentImageIndex < entries.size())
-				{
-					size_t size = entries[currentImageIndex].size;
-					if (size < 1024)
-					{
-						fileSize = std::to_string(size) + " B";
-					}
-					else if (size < 1024 * 1024)
-					{
-						fileSize = std::to_string(size / 1024) + " KB";
-					}
-					else
-					{
-						fileSize = std::to_string(size / (1024 * 1024)) + " MB";
-					}
+				if (currentImageIndex < entries.size()) {
+					fileSize = FileSystemHelper::getFileSizeString(entries[currentImageIndex].size);
 				}
 			}
 			else
@@ -2586,7 +3537,7 @@ public: //update funcs
 				fileName = UnicodeUtils::getFilenameOnly(imagePath);
 				std::filesystem::path path(currentImages[currentImageIndex]);
 				extension = UnicodeUtils::wstringToString(path.extension().wstring());
-				fileSize = getFileSizeString(currentImages[currentImageIndex]);
+				fileSize = FileSystemHelper::getFileSizeString(currentImages[currentImageIndex]);
 			}
 
 			const std::string dimensions = getImageDimensionsString();
@@ -2795,178 +3746,164 @@ public: //navigations and inputs
 	}
 
 	void nextImage() {
-		// CHECK if navigation is allowed
-		if (!navLock.isNavigationAllowed())
-		{
-			return; // Silently ignore if locked
-		}
+		NavigationHelper::executeIfNavigationAllowed(navLock, [this]() {
+			if (currentImages.empty()) return;
 
-		if (currentImages.empty()) return;
+			int nextIndex = currentImageIndex + 1;
 
-		int nextIndex = currentImageIndex + 1;
-
-		if (nextIndex >= currentImages.size())
-		{
-			nextFolder();
-			return;
-		}
-
-		sf::Vector2u nextImageSize = getImageDimensions(nextIndex);
-		if (nextImageSize.x > 0 && nextImageSize.y > 0)
-		{
-			if (sizeMismatchHandler.wouldNextImageNeedReset(nextImageSize))
+			if (nextIndex >= currentImages.size())
 			{
-				resetZoomAndPosition();
+				nextFolder();
+				return;
 			}
-		}
 
-		currentImageIndex = nextIndex;
+			sf::Vector2u nextImageSize = getImageDimensions(nextIndex);
+			if (nextImageSize.x > 0 && nextImageSize.y > 0)
+			{
+				if (sizeMismatchHandler.wouldNextImageNeedReset(nextImageSize))
+				{
+					resetZoomAndPosition();
+				}
+			}
 
-		if (isCurrentlyInArchive)
-		{
-			archiveHandler.clearCache(currentImageIndex - 1);
-		}
+			currentImageIndex = nextIndex;
 
-		loadCurrentImage();
+			if (isCurrentlyInArchive)
+			{
+				archiveHandler.clearCache(currentImageIndex - 1);
+			}
+
+			loadCurrentImage();
+		});
 	}
 
 	void previousImage() {
-		// CHECK if navigation is allowed
-		if (!navLock.isNavigationAllowed())
-		{
-			return; // Silently ignore if locked
-		}
+		NavigationHelper::executeIfNavigationAllowed(navLock, [this]() {
+			if (currentImages.empty()) return;
 
-		if (currentImages.empty()) return;
+			int prevIndex = currentImageIndex - 1;
 
-		int prevIndex = currentImageIndex - 1;
-
-		if (prevIndex < 0)
-		{
-			previousFolder();
-			if (!currentImages.empty())
+			if (prevIndex < 0)
 			{
-				currentImageIndex = currentImages.size() - 1;
-				loadCurrentImage();
+				previousFolder();
+				if (!currentImages.empty())
+				{
+					currentImageIndex = currentImages.size() - 1;
+					loadCurrentImage();
+				}
+				return;
 			}
-			return;
-		}
 
-		sf::Vector2u prevImageSize = getImageDimensions(prevIndex);
-		if (prevImageSize.x > 0 && prevImageSize.y > 0)
-		{
-			if (sizeMismatchHandler.wouldNextImageNeedReset(prevImageSize))
+			sf::Vector2u prevImageSize = getImageDimensions(prevIndex);
+			if (prevImageSize.x > 0 && prevImageSize.y > 0)
 			{
-				resetZoomAndPosition();
+				if (sizeMismatchHandler.wouldNextImageNeedReset(prevImageSize))
+				{
+					resetZoomAndPosition();
+				}
 			}
-		}
 
-		currentImageIndex = prevIndex;
+			currentImageIndex = prevIndex;
 
-		if (isCurrentlyInArchive)
-		{
-			archiveHandler.clearCache(currentImageIndex + 1);
-		}
+			if (isCurrentlyInArchive)
+			{
+				archiveHandler.clearCache(currentImageIndex + 1);
+			}
 
-		loadCurrentImage();
+			loadCurrentImage();
+		});
 	}
 
 	void nextFolder() {
-		// CHECK if navigation is allowed
-		if (!navLock.isNavigationAllowed())
-		{
-			return; // Silently ignore if locked
-		}
+		NavigationHelper::executeIfNavigationAllowed(navLock, [this]() {
+			if (folders.empty()) return;
 
-		if (folders.empty()) return;
-
-		if (folderLoadingFuture.valid())
-		{
-			folderLoadingFuture.wait();
-		}
-
-		if (isCurrentlyInArchive)
-		{
-			archiveHandler.closeArchive();
-			isCurrentlyInArchive = false;
-			currentArchivePath = L"";
-		}
-
-		int originalIndex = currentFolderIndex;
-		do
-		{
-			currentFolderIndex++;
-			if (currentFolderIndex >= folders.size())
+			if (folderLoadingFuture.valid())
 			{
-				currentFolderIndex = 0;
+				folderLoadingFuture.wait();
 			}
 
-			try
+			if (isCurrentlyInArchive)
 			{
-				loadImagesFromFolder(folders[currentFolderIndex]);
-				currentImageIndex = 0;
-				if (!currentImages.empty() && loadCurrentImage())
+				archiveHandler.closeArchive();
+				isCurrentlyInArchive = false;
+				currentArchivePath = L"";
+			}
+
+			int originalIndex = currentFolderIndex;
+			do
+			{
+				currentFolderIndex++;
+				if (currentFolderIndex >= folders.size())
 				{
-					return; // Successfully loaded next folder
+					currentFolderIndex = 0;
 				}
-			} catch (...)
-			{
-				// Skip this folder and continue to next
-			}
 
-		} while (currentFolderIndex != originalIndex);
+				try
+				{
+					loadImagesFromFolder(folders[currentFolderIndex]);
+					currentImageIndex = 0;
+					if (!currentImages.empty() && loadCurrentImage())
+					{
+						updateNavigationButtons(); // Update button states
+						return; // Successfully loaded next folder
+					}
+				} catch (...)
+				{
+					// Skip this folder and continue to next
+				}
 
-		// If we get here, no working folders found
-		LockedMessageBox::showWarning(L"No more working folders found.", L"Navigation Warning");
+			} while (currentFolderIndex != originalIndex);
+
+			// If we get here, no working folders found
+			LockedMessageBox::showWarning(L"No more working folders found.", L"Navigation Warning");
+		});
 	}
 
 	void previousFolder() {
-		// CHECK if navigation is allowed
-		if (!navLock.isNavigationAllowed())
-		{
-			return; // Silently ignore if locked
-		}
+		NavigationHelper::executeIfNavigationAllowed(navLock, [this]() {
+			if (folders.empty()) return;
 
-		if (folders.empty()) return;
-
-		if (folderLoadingFuture.valid())
-		{
-			folderLoadingFuture.wait();
-		}
-
-		if (isCurrentlyInArchive)
-		{
-			archiveHandler.closeArchive();
-			isCurrentlyInArchive = false;
-			currentArchivePath = L"";
-		}
-
-		int originalIndex = currentFolderIndex;
-		do
-		{
-			currentFolderIndex--;
-			if (currentFolderIndex >= folders.size())
+			if (folderLoadingFuture.valid())
 			{
-				currentFolderIndex = 0;
+				folderLoadingFuture.wait();
 			}
 
-			try
+			if (isCurrentlyInArchive)
 			{
-				loadImagesFromFolder(folders[currentFolderIndex]);
-				currentImageIndex = 0;
-				if (!currentImages.empty() && loadCurrentImage())
+				archiveHandler.closeArchive();
+				isCurrentlyInArchive = false;
+				currentArchivePath = L"";
+			}
+
+			int originalIndex = currentFolderIndex;
+			do
+			{
+				currentFolderIndex--;
+				if (currentFolderIndex < 0)
 				{
-					return; // Successfully loaded next folder
+					currentFolderIndex = folders.size() - 1;
 				}
-			} catch (...)
-			{
-				// Skip this folder and continue to next
-			}
 
-		} while (currentFolderIndex != originalIndex);
+				try
+				{
+					loadImagesFromFolder(folders[currentFolderIndex]);
+					currentImageIndex = 0;
+					if (!currentImages.empty() && loadCurrentImage())
+					{
+						updateNavigationButtons(); // Update button states
+						return; // Successfully loaded next folder
+					}
+				} catch (...)
+				{
+					// Skip this folder and continue to next
+				}
 
-		// If we get here, no working folders found
-		LockedMessageBox::showWarning(L"No more working folders found.", L"Navigation Warning");
+			} while (currentFolderIndex != originalIndex);
+
+			// If we get here, no working folders found
+			LockedMessageBox::showWarning(L"No more working folders found.", L"Navigation Warning");
+		});
 	}
 
 	void handleInput() {
@@ -3029,7 +3966,8 @@ public: //navigations and inputs
 					showUI = !showUI; // Allow UI toggle even when locked
 					break;
 				case sf::Keyboard::Key::I:
-					infoButton.toggleInfo(); // Allow info toggle even when locked
+					buttonManager.toggleButton(ButtonID::INFO_BUTTON);
+					saveCurrentSession();
 					break;
 				case sf::Keyboard::Key::R:
 					if (navLock.isNavigationAllowed()) selectNewMangaFolder();
@@ -3073,9 +4011,12 @@ public: //navigations and inputs
 				}
 				else if (mb.button == sf::Mouse::Button::Left)
 				{
-					if (infoButton.isClicked(window.mapPixelToCoords(mb.position)))
+					sf::Vector2f mousePos = window.mapPixelToCoords(mb.position);
+					ButtonID clickedButton = buttonManager.checkButtonClick(mousePos);
+
+					if (clickedButton != ButtonID::COUNT)
 					{
-						infoButton.toggleInfo(); // Allow info toggle even when locked
+						handleButtonClick(clickedButton);
 					}
 				}
 			},
@@ -3085,7 +4026,8 @@ public: //navigations and inputs
 			},
 			[&](const sf::Event::Resized& resize) {
 				if (LockedMessageBox::isActive()) return;
-				handleWindowResize(sf::Vector2u(resize.size.x, resize.size.y));
+					handleWindowResize(sf::Vector2u(resize.size.x, resize.size.y));
+				saveCurrentSession(); // Save window size changes
 			},
 			[&](const sf::Event::FocusLost&) {
 				if (LockedMessageBox::isActive()) return;
@@ -3149,7 +4091,7 @@ public: //rendering
 			window.draw(*statusText.get());
 
 			// Draw detailed info if visible
-			if (infoButton.getInfoVisible())
+			if (buttonManager.isButtonToggled(ButtonID::INFO_BUTTON))
 			{
 				sf::RectangleShape detailedBg;
 				sf::FloatRect textBounds = detailedInfoText.get()->getLocalBounds();
@@ -3167,7 +4109,19 @@ public: //rendering
 				window.draw(*detailedInfoText.get());
 			}
 
-			window.draw(*helpText.get());
+			if (showHelpText && buttonManager.isButtonToggled(ButtonID::HELP_BUTTON))
+			{
+				// Optional: Add semi-transparent background for help text
+				sf::FloatRect helpBounds = helpText.get()->getLocalBounds();
+				sf::RectangleShape helpBg;
+				helpBg.setSize({ helpBounds.size.x + 20.f, helpBounds.size.y + 20.f });
+				helpBg.setPosition(sf::Vector2f(helpText.get()->getPosition().x - 10.f,
+					helpText.get()->getPosition().y - 10.f));
+				helpBg.setFillColor(sf::Color(0, 0, 0, 150));
+				window.draw(helpBg);
+
+				window.draw(*helpText.get());
+			}
 		}
 
 		// SHOW NAVIGATION LOCK INDICATOR when locked
@@ -3203,8 +4157,8 @@ public: //rendering
 			drawLoadingOverlay(window);
 		}
 
-		// Always draw info button
-		infoButton.draw(window);
+		// Draw loading overlay if loading folder
+		buttonManager.drawAll(window);
 
 		window.display();
 	}
