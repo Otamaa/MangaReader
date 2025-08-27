@@ -2352,9 +2352,15 @@ enum class ButtonID {
 	INFO_BUTTON,
 	PREVIOUS_FOLDER,
 	NEXT_FOLDER,
-	SETTINGS_BUTTON,  // New button
+	SETTINGS_BUTTON,
 	HELP_BUTTON,
 	COUNT
+};
+
+enum class SessionChoice {
+	RESTORE_SESSION,
+	NEW_SESSION,
+	CANCELLED
 };
 
 class UIButton {
@@ -2646,6 +2652,10 @@ static constexpr const char* CONFIG_WINDOW_HEIGHT = "Settings.windowHeight";
 static constexpr const char* CONFIG_WINDOW_MAXIMIZED = "Settings.windowMaximized";
 static constexpr const char* CONFIG_WINDOW_FULLSCREEN = "Settings.windowFullscreen";
 static constexpr const char* CONFIG_USE_SMOOTHING = "Settings.useSmoothing";
+static constexpr const char* CONFIG_ASK_SESSION_RESTORE = "Settings.askSessionRestore";
+static constexpr const char* CONFIG_LAST_SESSION_EXISTS = "Settings.lastSessionExists";
+static constexpr const char* CONFIG_SHOW_SESSION_SUCCESS = "Settings.showSessionSuccessDialog";
+
 
 struct CommandLineOptions {
 	bool enableLongPaths = false;
@@ -3202,6 +3212,13 @@ public: //constructor and destructor
 		helpConfig.hasCircularBg = true;
 		helpConfig.fontSize = 18;
 
+		UIButton::ButtonConfig settingsConfig;
+		settingsConfig.text = "S";
+		settingsConfig.backgroundColor = sf::Color(150, 100, 50, 200);
+		settingsConfig.textColor = sf::Color(150, 100, 50);
+		settingsConfig.hasCircularBg = true;
+		settingsConfig.fontSize = 18;
+
 		// Calculate initial positions
 		float buttonY = 10.0f;
 		float buttonSize = 30.0f;
@@ -3213,6 +3230,7 @@ public: //constructor and destructor
 		buttonManager.addButton(*font.get(), ButtonID::NEXT_FOLDER, infoButtonX - spacing, buttonY, nextConfig, buttonSize);
 		buttonManager.addButton(*font.get(), ButtonID::PREVIOUS_FOLDER, infoButtonX - (spacing * 2), buttonY, prevConfig, buttonSize);
 		buttonManager.addButton(*font.get(), ButtonID::HELP_BUTTON, infoButtonX - (spacing * 3), buttonY, helpConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::SETTINGS_BUTTON, infoButtonX - (spacing * 4), buttonY, settingsConfig, buttonSize);
 
 		// Set up info button as toggleable
 		buttonManager.getButton(ButtonID::INFO_BUTTON)->setToggleState(true, false);
@@ -3221,85 +3239,6 @@ public: //constructor and destructor
 		// Update button states
 		updateNavigationButtons();
 	}
-
-	void initializeConfig() {
-		try
-		{
-			config = std::make_unique<ConfigManager>();
-
-			// Try to restore last session if config exists
-			if (config->hasKey(CONFIG_LAST_FOLDER))
-			{
-				std::wstring lastFolder = config->getWString(CONFIG_LAST_FOLDER);
-				if (!lastFolder.empty() && std::filesystem::exists(lastFolder))
-				{
-					rootMangaPath = lastFolder;
-					int lastFolderIndex = config->getInt(CONFIG_LAST_FOLDER_INDEX, 0);
-					int lastImageIndex = config->getInt(CONFIG_LAST_IMAGE_INDEX, 0);
-
-					loadFolders(rootMangaPath);
-
-					// ADD THIS: Update button states after folders are loaded
-					updateNavigationButtons();
-
-					if (!folders.empty())
-					{
-						// Clamp indices to valid ranges
-						currentFolderIndex = std::max(0, std::min(lastFolderIndex, (int)folders.size() - 1));
-
-						loadImagesFromFolder(folders[currentFolderIndex]);
-
-						if (!currentImages.empty())
-						{
-							currentImageIndex = std::max(0, std::min(lastImageIndex, (int)currentImages.size() - 1));
-							if (loadCurrentImage())
-							{
-								// Restore button states after successful restoration
-								if (config->hasKey("UI.infoButtonVisible"))
-								{
-									if (config->getBool("UI.infoButtonVisible", false))
-									{
-										buttonManager.getButton(ButtonID::INFO_BUTTON)->setToggleState(true, true);
-									}
-								}
-
-								if (config->hasKey("UI.helpButtonVisible"))
-								{
-									bool helpVisible = config->getBool("UI.helpButtonVisible", true);
-									buttonManager.getButton(ButtonID::HELP_BUTTON)->setToggleState(true, helpVisible);
-									showHelpText = helpVisible;
-								}
-
-								updateWindowTitle();
-								return; // Successfully restored session
-							}
-						}
-					}
-				}
-			}
-
-			// If restoration failed, start fresh
-			browseFolderOnStartup();
-
-		} catch (const std::exception& e)
-		{
-			// If config fails, fall back to normal startup
-			browseFolderOnStartup();
-		}
-	}
-
-	void openSettingsDialog() {
-		// Simple settings dialog for now
-		std::wstring message = L"Settings (Quick Toggle):\n\n";
-		message += L"Current Settings:\n";
-		message += L"• Smoothing: " + std::wstring(useSmoothing ? L"ON" : L"OFF") + L"\n\n";
-		message += L"Press Q to toggle smoothing\n";
-		message += L"Press R to select new manga folder\n\n";
-		message += L"More settings coming soon...";
-
-		LockedMessageBox::showInfo(message, L"Settings");
-	}
-
 
 	void browseFolderOnStartup() {
 		rootMangaPath = browseForFolder();
@@ -3362,6 +3301,9 @@ public: //constructor and destructor
 			config->setInt(CONFIG_LAST_FOLDER_INDEX, currentFolderIndex);
 			config->setInt(CONFIG_LAST_IMAGE_INDEX, currentImageIndex);
 
+			// Mark that we have session data
+			config->setBool(CONFIG_LAST_SESSION_EXISTS, true);
+
 			// Save window settings
 			HWND hwnd = window.getNativeHandle();
 			if (hwnd)
@@ -3371,13 +3313,11 @@ public: //constructor and destructor
 
 				if (!isCurrentlyFullscreen)
 				{
-					// Only check maximized state and save dimensions when not fullscreen
 					bool isMaximized = IsZoomed(hwnd) == TRUE;
 					config->setBool(CONFIG_WINDOW_MAXIMIZED, isMaximized);
 
 					if (!isMaximized)
 					{
-						// Only save dimensions if not maximized
 						sf::Vector2u windowSize = window.getSize();
 						config->setInt(CONFIG_WINDOW_WIDTH, windowSize.x);
 						config->setInt(CONFIG_WINDOW_HEIGHT, windowSize.y);
@@ -3385,7 +3325,6 @@ public: //constructor and destructor
 				}
 				else
 				{
-					// In fullscreen, save the windowed state
 					config->setBool(CONFIG_WINDOW_MAXIMIZED, wasMaximizedOnStart);
 					if (!wasMaximizedOnStart && windowedRect.right > windowedRect.left)
 					{
@@ -3396,7 +3335,6 @@ public: //constructor and destructor
 			}
 			else
 			{
-				// Fallback if no native handle
 				sf::Vector2u windowSize = window.getSize();
 				config->setInt(CONFIG_WINDOW_WIDTH, windowSize.x);
 				config->setInt(CONFIG_WINDOW_HEIGHT, windowSize.y);
@@ -3417,6 +3355,146 @@ public: //constructor and destructor
 		}
 	}
 
+	void resetSessionRestorePreference() {
+		config->setBool(CONFIG_ASK_SESSION_RESTORE, true);
+		config->forceSave();
+
+		LockedMessageBox::showInfo(
+			L"Session restore preference has been reset.\n\n"
+			L"You will be asked about session restoration on next startup.",
+			L"Preference Reset"
+		);
+	}
+
+	bool getAskSessionRestore() const {
+		return config->getBool(CONFIG_ASK_SESSION_RESTORE, true);
+	}
+
+	void openSettingsDialog() {
+		bool askSessionRestore = getAskSessionRestore();
+		bool showSessionSuccess = config->getBool(CONFIG_SHOW_SESSION_SUCCESS, false);
+
+		std::wstring message = L"SETTINGS\n\n";
+		message += L"Current Settings:\n";
+		message += L"• Smoothing: " + std::wstring(useSmoothing ? L"ON" : L"OFF") + L"\n";
+		message += L"• Ask Session Restore: " + std::wstring(askSessionRestore ? L"ON" : L"OFF") + L"\n";
+		message += L"• Show Session Success Dialog: " + std::wstring(showSessionSuccess ? L"ON" : L"OFF") + L"\n\n";
+
+		message += L"Quick Actions:\n";
+		message += L"• Press Q to toggle smoothing\n";
+		message += L"• Press R to select new manga folder\n\n";
+
+		message += L"Session Options:\n";
+		message += L"YES - Open advanced session settings\n";
+		message += L"NO - Close settings\n";
+
+		int result = LockedMessageBox::showQuestion(message, L"Settings");
+
+		if (result == IDYES)
+		{
+			showAdvancedSessionSettings();
+		}
+	}
+
+	void showAdvancedSessionSettings() {
+		bool askSessionRestore = getAskSessionRestore();
+		bool showSessionSuccess = config->getBool(CONFIG_SHOW_SESSION_SUCCESS, false);
+
+		std::wstring message = L"ADVANCED SESSION SETTINGS\n\n";
+		message += L"Current Settings:\n";
+		message += L"• Ask Session Restore: " + std::wstring(askSessionRestore ? L"ON" : L"OFF") + L"\n";
+		message += L"• Show Success Dialog: " + std::wstring(showSessionSuccess ? L"ON" : L"OFF") + L"\n\n";
+
+		message += L"What would you like to change?\n\n";
+		message += L"1. Toggle 'Ask Session Restore'\n";
+		message += L"2. Toggle 'Show Success Dialog'\n";
+		message += L"3. Reset all session preferences\n";
+		message += L"4. Cancel";
+
+		// Use a custom dialog with numbered options
+		int choice = showNumberedChoiceDialog(message, L"Advanced Session Settings", 4);
+
+		switch (choice)
+		{
+		case 1:
+			config->setBool(CONFIG_ASK_SESSION_RESTORE, !askSessionRestore);
+			config->forceSave();
+			LockedMessageBox::showInfo(
+				L"Ask Session Restore: " + std::wstring(!askSessionRestore ? L"ENABLED" : L"DISABLED"),
+				L"Setting Updated"
+			);
+			break;
+
+		case 2:
+			config->setBool(CONFIG_SHOW_SESSION_SUCCESS, !showSessionSuccess);
+			config->forceSave();
+			LockedMessageBox::showInfo(
+				L"Show Success Dialog: " + std::wstring(!showSessionSuccess ? L"ENABLED" : L"DISABLED"),
+				L"Setting Updated"
+			);
+			break;
+
+		case 3:
+			resetAllSessionPreferences();
+			break;
+
+		case 4:
+		default:
+			// Cancel - do nothing
+			break;
+		}
+	}
+
+	void resetAllSessionPreferences() {
+		config->setBool(CONFIG_ASK_SESSION_RESTORE, true);
+		config->setBool(CONFIG_SHOW_SESSION_SUCCESS, false);
+		config->forceSave();
+
+		LockedMessageBox::showInfo(
+			L"All session preferences have been reset to defaults:\n\n"
+			L"• Ask Session Restore: ENABLED\n"
+			L"• Show Success Dialog: DISABLED\n\n"
+			L"Changes will take effect on next startup.",
+			L"Preferences Reset"
+		);
+	}
+
+	void setAskSessionRestore(bool ask) {
+		config->setBool(CONFIG_ASK_SESSION_RESTORE, ask);
+		config->forceSave();
+	}
+
+	int showNumberedChoiceDialog(const std::wstring& message, const std::wstring& title, int maxChoice) {
+		std::wstring fullMessage = message + L"\n\nEnter choice (1-" + std::to_wstring(maxChoice) + L"):";
+
+		// For simplicity, use a series of Yes/No dialogs
+		// In a more advanced implementation, you might create a custom dialog
+		std::wstring choiceMsg = message + L"\n\nChoose option 1? (Press NO to see next option)";
+
+		for (int i = 1; i <= maxChoice; i++)
+		{
+			std::wstring currentMsg = message + L"\n\nChoose option " + std::to_wstring(i) + L"?";
+			if (i < maxChoice)
+			{
+				currentMsg += L"\n(Press NO to see next option, CANCEL to abort)";
+			}
+
+			int result = LockedMessageBox::showMessageBox(currentMsg, title, MB_YESNOCANCEL | MB_ICONQUESTION);
+
+			if (result == IDYES)
+			{
+				return i;
+			}
+			else if (result == IDCANCEL)
+			{
+				return maxChoice; // Return last option (usually cancel)
+			}
+			// If NO, continue to next option
+		}
+
+		return maxChoice; // Default to last option
+	}
+
 	void updateNavigationButtons() {
 		// Enable/disable buttons based on available folders
 		bool hasMultipleFolders = (folders.size() > 1);
@@ -3435,7 +3513,7 @@ public: //constructor and destructor
 			switch (id)
 			{
 			case ButtonID::SETTINGS_BUTTON:
-				return sf::Vector2f(infoButtonX - (spacing * 3), buttonY);
+				return sf::Vector2f(infoButtonX - (spacing * 4), buttonY);
 			case ButtonID::HELP_BUTTON:
 				return sf::Vector2f(infoButtonX - (spacing * 3), buttonY);
 			case ButtonID::INFO_BUTTON:
@@ -3509,6 +3587,260 @@ public: //constructor and destructor
 		}
 	}
 
+	SessionChoice showSessionRestoreDialog() {
+		// Check if we should ask (default: true for new users)
+		bool shouldAsk = config->getBool(CONFIG_ASK_SESSION_RESTORE, true);
+
+		if (!shouldAsk)
+		{
+			// If set to not ask, always restore session if available
+			return SessionChoice::RESTORE_SESSION;
+		}
+
+		std::wstring message = L"PREVIOUS SESSION DETECTED\n\n";
+
+		// Get session details if available
+		std::wstring lastFolder = config->getWString(CONFIG_LAST_FOLDER, L"");
+		int lastFolderIndex = config->getInt(CONFIG_LAST_FOLDER_INDEX, 0);
+		int lastImageIndex = config->getInt(CONFIG_LAST_IMAGE_INDEX, 0);
+
+		if (!lastFolder.empty())
+		{
+			std::filesystem::path folderPath(lastFolder);
+			std::wstring folderName = folderPath.filename().wstring();
+			if (folderName.empty())
+			{
+				folderName = folderPath.parent_path().filename().wstring();
+			}
+
+			message += L"Last Folder: " + folderName + L"\n";
+			message += L"Folder Position: " + std::to_wstring(lastFolderIndex + 1) + L"\n";
+			message += L"Image Position: " + std::to_wstring(lastImageIndex + 1) + L"\n\n";
+		}
+
+		message += L"Would you like to:\n\n";
+		message += L"YES - Continue from where you left off\n";
+		message += L"NO - Start with folder selection dialog\n";
+		message += L"CANCEL - Exit application\n\n";
+		message += L"(You can change this preference later in settings)";
+
+		int result = LockedMessageBox::showMessageBox(message, L"Restore Previous Session?",
+			MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1);
+
+		switch (result)
+		{
+		case IDYES:
+			// Ask about future behavior only if they chose to restore
+			askAboutFutureSessionBehavior();
+			return SessionChoice::RESTORE_SESSION;
+
+		case IDNO:
+			// Ask about future behavior since they chose new session
+			askAboutFutureSessionBehavior();
+			return SessionChoice::NEW_SESSION;
+
+		case IDCANCEL:
+		default:
+			return SessionChoice::CANCELLED;
+		}
+	}
+
+	void askAboutFutureSessionBehavior() {
+		std::wstring message = L"SESSION PREFERENCE\n\n";
+		message += L"Would you like to be asked about session restoration in the future?\n\n";
+		message += L"YES - Always ask (current behavior)\n";
+		message += L"NO - Always restore previous session automatically\n\n";
+		message += L"Note: You can change this setting by editing the configuration file or through the settings menu.";
+
+		int result = LockedMessageBox::showQuestion(message, L"Future Session Behavior");
+
+		if (result == IDNO)
+		{
+			// User chose to not be asked again - set config to auto-restore
+			config->setBool(CONFIG_ASK_SESSION_RESTORE, false);
+			config->forceSave();
+
+			LockedMessageBox::showInfo(
+				L"Session preference updated.\n\n"
+				L"The application will now automatically restore your previous session on startup.\n\n"
+				L"You can change this by editing the configuration file:\n" +
+				config->getConfigFilePath(),
+				L"Preference Saved"
+			);
+		}
+		// If YES (or other), keep the default behavior of asking
+	}
+
+	bool hasValidPreviousSession() {
+		// Check if we have the minimum required session data
+		if (!config->hasKey(CONFIG_LAST_FOLDER))
+		{
+			return false;
+		}
+
+		std::wstring lastFolder = config->getWString(CONFIG_LAST_FOLDER);
+		if (lastFolder.empty())
+		{
+			return false;
+		}
+
+		// Verify the folder still exists
+		try
+		{
+			return std::filesystem::exists(lastFolder);
+		} catch (...)
+		{
+			return false;
+		}
+	}
+
+	void markSessionAsActive() {
+		// Mark that we have an active session for future checks
+		config->setBool(CONFIG_LAST_SESSION_EXISTS, true);
+		config->forceSave();
+	}
+
+	void initializeConfig() {
+		try
+		{
+			config = std::make_unique<ConfigManager>();
+
+			// Check if we have a valid previous session
+			if (hasValidPreviousSession())
+			{
+				SessionChoice choice = showSessionRestoreDialog();
+
+				switch (choice)
+				{
+				case SessionChoice::RESTORE_SESSION:
+					if (attemptSessionRestore())
+					{
+						markSessionAsActive();
+						return; // Successfully restored
+					}
+					else
+					{
+						// Restore failed, fall back to folder selection
+						LockedMessageBox::showWarning(
+							L"Failed to restore previous session.\n"
+							L"Starting with folder selection dialog.",
+							L"Session Restore Failed"
+						);
+						browseFolderOnStartup();
+					}
+					break;
+
+				case SessionChoice::NEW_SESSION:
+					// User explicitly chose new session
+					browseFolderOnStartup();
+					break;
+
+				case SessionChoice::CANCELLED:
+					// User cancelled - close application
+					window.close();
+					return;
+				}
+			}
+			else
+			{
+				// No valid previous session, start fresh
+				browseFolderOnStartup();
+			}
+
+		} catch (const std::exception& e)
+		{
+			// If anything fails, fall back to normal startup
+			LockedMessageBox::showWarning(
+				L"Error during initialization: " + UnicodeUtils::stringToWstring(e.what()) +
+				L"\n\nStarting with folder selection.",
+				L"Initialization Error"
+			);
+			browseFolderOnStartup();
+		}
+	}
+
+	bool attemptSessionRestore() {
+		try
+		{
+			std::wstring lastFolder = config->getWString(CONFIG_LAST_FOLDER);
+			int lastFolderIndex = config->getInt(CONFIG_LAST_FOLDER_INDEX, 0);
+			int lastImageIndex = config->getInt(CONFIG_LAST_IMAGE_INDEX, 0);
+
+			if (lastFolder.empty() || !std::filesystem::exists(lastFolder))
+			{
+				return false;
+			}
+
+			rootMangaPath = lastFolder;
+			loadFolders(rootMangaPath);
+
+			updateNavigationButtons();
+
+			if (!folders.empty())
+			{
+				// Clamp indices to valid ranges
+				currentFolderIndex = std::max(0, std::min(lastFolderIndex, (int)folders.size() - 1));
+
+				loadImagesFromFolder(folders[currentFolderIndex]);
+
+				if (!currentImages.empty())
+				{
+					currentImageIndex = std::max(0, std::min(lastImageIndex, (int)currentImages.size() - 1));
+					if (loadCurrentImage())
+					{
+						// Restore UI states
+						restoreUIStates();
+						updateWindowTitle();
+
+						// Only show success message if enabled (default: false)
+						bool showSuccess = config->getBool(CONFIG_SHOW_SESSION_SUCCESS, false);
+						if (showSuccess)
+						{
+							std::wstring successMsg = L"Session restored successfully!\n\n";
+							std::filesystem::path folderPath(lastFolder);
+							std::wstring folderName = folderPath.filename().wstring();
+							if (folderName.empty())
+							{
+								folderName = folderPath.parent_path().filename().wstring();
+							}
+
+							successMsg += L"Folder: " + folderName + L"\n";
+							successMsg += L"Position: " + std::to_wstring(currentFolderIndex + 1) +
+								L"/" + std::to_wstring(folders.size()) + L" folders, " +
+								std::to_wstring(currentImageIndex + 1) + L"/" +
+								std::to_wstring(currentImages.size()) + L" images";
+
+							LockedMessageBox::showInfo(successMsg, L"Session Restored");
+						}
+
+						return true;
+					}
+				}
+			}
+
+			return false;
+
+		} catch (const std::exception& e)
+		{
+			return false;
+		}
+	}
+
+	void restoreUIStates() {
+		// Restore UI button states
+		if (config->hasKey("UI.infoButtonVisible"))
+		{
+			bool infoVisible = config->getBool("UI.infoButtonVisible", false);
+			buttonManager.getButton(ButtonID::INFO_BUTTON)->setToggleState(true, infoVisible);
+		}
+
+		if (config->hasKey("UI.helpButtonVisible"))
+		{
+			bool helpVisible = config->getBool("UI.helpButtonVisible", true);
+			buttonManager.getButton(ButtonID::HELP_BUTTON)->setToggleState(true, helpVisible);
+			showHelpText = helpVisible;
+		}
+	}
 public: //helpers
 
 	sf::Image scaleImage(const sf::Image& originalImage, sf::Vector2u newSize) {
