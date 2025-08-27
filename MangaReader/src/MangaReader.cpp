@@ -28,6 +28,7 @@
 #include <archive_entry.h>
 
 #include <webp/decode.h>
+#include <CLI/CLI.hpp>
 
 class ImageSizeMismatchHandler {
 private:
@@ -453,7 +454,6 @@ std::string wrapText(const std::string& str, const sf::Font& font, unsigned int 
 	return wrapped;
 }
 
-// Archive Entry Structure
 struct ArchiveEntry {
 	std::string name;
 	size_t size;
@@ -810,7 +810,318 @@ public:
 	}
 };
 
-// Updated ArchiveHandler class with RAR support
+struct PathLimitChecker {
+
+	static bool isRunningAsAdmin() {
+		BOOL isAdmin = FALSE;
+		HANDLE hToken = NULL;
+
+		if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+		{
+			TOKEN_ELEVATION elevation;
+			DWORD cbSize = sizeof(TOKEN_ELEVATION);
+
+			if (GetTokenInformation(hToken, TokenElevation, &elevation, sizeof(elevation), &cbSize))
+			{
+				isAdmin = elevation.TokenIsElevated;
+			}
+			CloseHandle(hToken);
+		}
+
+		return isAdmin == TRUE;
+	}
+
+	static bool enableLongPathSupport() {
+		if (!isRunningAsAdmin())
+		{
+			return false; // Need admin privileges
+		}
+
+		HKEY hKey;
+		LONG result = RegOpenKeyExW(
+			HKEY_LOCAL_MACHINE,
+			L"SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+			0,
+			KEY_SET_VALUE,
+			&hKey
+		);
+
+		if (result == ERROR_SUCCESS)
+		{
+			DWORD value = 1;
+			result = RegSetValueExW(
+				hKey,
+				L"LongPathsEnabled",
+				0,
+				REG_DWORD,
+				reinterpret_cast<const BYTE*>(&value),
+				sizeof(DWORD)
+			);
+
+			RegCloseKey(hKey);
+			return (result == ERROR_SUCCESS);
+		}
+
+		return false;
+	}
+
+	static bool isLongPathSupportEnabled() {
+		HKEY hKey;
+		DWORD dwValue = 0;
+		DWORD dwSize = sizeof(DWORD);
+
+		// Open the registry key
+		LONG result = RegOpenKeyExW(
+			HKEY_LOCAL_MACHINE,
+			L"SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+			0,
+			KEY_READ,
+			&hKey
+		);
+
+		if (result == ERROR_SUCCESS)
+		{
+			// Query the LongPathsEnabled value
+			result = RegQueryValueExW(
+				hKey,
+				L"LongPathsEnabled",
+				nullptr,
+				nullptr,
+				reinterpret_cast<LPBYTE>(&dwValue),
+				&dwSize
+			);
+
+			RegCloseKey(hKey);
+
+			if (result == ERROR_SUCCESS)
+			{
+				return (dwValue == 1);
+			}
+		}
+
+		return false; // Default to disabled if can't read
+	}
+
+	static void showPathLimitInfo() {
+		bool longPathsEnabled = PathLimitChecker::isLongPathSupportEnabled();
+		bool isAdmin = PathLimitChecker::getIsRunningAsAdmin();
+
+		std::wstring message = L"PATH LENGTH INFORMATION:\n\n";
+		message += L"Current Path Limit: " + std::to_wstring(PathLimitChecker::getMaxPathLength()) + L" characters\n";
+		message += L"Long Path Support: " + std::wstring(longPathsEnabled ? L"ENABLED" : L"DISABLED") + L"\n";
+		message += L"Running as Administrator: " + std::wstring(isAdmin ? L"YES" : L"NO") + L"\n\n";
+
+		if (!longPathsEnabled)
+		{
+			if (isAdmin)
+			{
+				message += L"Long path support can be enabled automatically.\n";
+				message += L"Click 'YES' to enable it now, or 'NO' for manual instructions.";
+
+				int result = LockedMessageBox::showQuestion(message, L"Enable Long Path Support?");
+
+				if (result == IDYES)
+				{
+					if (PathLimitChecker::tryEnableLongPaths())
+					{
+						LockedMessageBox::showInfo(
+							L"Long path support has been enabled successfully!\n\n"
+							L"Note: You may need to restart the application for changes to take full effect.",
+							L"Success"
+						);
+					}
+					else
+					{
+						LockedMessageBox::showError(
+							L"Failed to enable long path support.\n"
+							L"Please enable it manually using the instructions below.",
+							L"Enable Failed"
+						);
+						showManualInstructions();
+					}
+				}
+				else
+				{
+					showManualInstructions();
+				}
+			}
+			else
+			{
+				message += L"To enable long path support, administrator privileges are required.\n";
+				message += L"Click 'YES' to restart as administrator, or 'NO' for manual instructions.";
+
+				int result = LockedMessageBox::showQuestion(message, L"Restart as Administrator?");
+
+				if (result == IDYES)
+				{
+					if (PathLimitChecker::restartAsAdmin())
+					{
+						// Application will restart with elevation
+						std::exit(0);
+					}
+					else
+					{
+						LockedMessageBox::showError(
+							L"Failed to restart with administrator privileges.\n"
+							L"Please run the application as administrator manually.",
+							L"Elevation Failed"
+						);
+					}
+				}
+				else
+				{
+					showManualInstructions();
+				}
+			}
+		}
+		else
+		{
+			LockedMessageBox::showInfo(message, L"Path Length Settings");
+		}
+	}
+
+	static void showManualInstructions() {
+		std::wstring message = L"MANUAL SETUP INSTRUCTIONS:\n\n";
+		message += L"Method 1 - Group Policy Editor:\n";
+		message += L"1. Press Win+R, type 'gpedit.msc', press Enter\n";
+		message += L"2. Navigate to: Computer Configuration > Administrative Templates > System > Filesystem\n";
+		message += L"3. Double-click 'Enable NTFS long paths'\n";
+		message += L"4. Select 'Enabled', click OK\n";
+		message += L"5. Restart this application\n\n";
+
+		message += L"Method 2 - Registry Editor:\n";
+		message += L"1. Press Win+R, type 'regedit', press Enter\n";
+		message += L"2. Navigate to: HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\n";
+		message += L"3. Create or modify DWORD: LongPathsEnabled\n";
+		message += L"4. Set value to: 1\n";
+		message += L"5. Restart this application\n\n";
+
+		message += L"Method 3 - Command Line (Run as Administrator):\n";
+		message += L"reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\" /v LongPathsEnabled /t REG_DWORD /d 1";
+
+		LockedMessageBox::showInfo(message, L"Manual Setup Instructions");
+	}
+
+	static size_t getMaxComponentLength() {
+		// Component length limit doesn't change
+		return 255;
+	}
+
+	static size_t getMaxPathLength() {
+		if (isLongPathSupportEnabled())
+		{
+			return 32767;
+		}
+		else
+		{
+			return 260;
+		}
+	}
+
+	static size_t getSafePathLength() {
+		size_t maxPath = getMaxPathLength();
+		return maxPath > 260 ? maxPath - 50 : 240;
+	}
+
+	// Try to enable long path support
+	static bool tryEnableLongPaths() {
+		if (isLongPathSupportEnabled())
+		{
+			return true; // Already enabled
+		}
+
+		if (isRunningAsAdmin())
+		{
+			return enableLongPathSupport();
+		}
+
+		return false; // Need elevation
+	}
+
+	// Restart application with admin privileges
+	static bool restartAsAdmin() {
+		wchar_t exePath[MAX_PATH];
+		GetModuleFileNameW(NULL, exePath, MAX_PATH);
+
+		// Preserve current command line arguments and add --enable-long-paths
+		std::wstring params = L"--enable-long-paths";
+
+		// Add other relevant arguments if needed
+		// You could store original argc/argv to reconstruct them here
+
+		SHELLEXECUTEINFOW sei = {};
+		sei.cbSize = sizeof(SHELLEXECUTEINFOW);
+		sei.lpVerb = L"runas";
+		sei.lpFile = exePath;
+		sei.lpParameters = params.c_str();
+		sei.nShow = SW_NORMAL;
+		sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+
+		return ShellExecuteExW(&sei) == TRUE;
+	}
+
+	static bool getIsRunningAsAdmin() {
+		return isRunningAsAdmin();
+	}
+
+
+	static void handleEnableLongPaths() {
+
+		if (PathLimitChecker::isLongPathSupportEnabled())
+		{
+			LockedMessageBox::showInfo(
+				L"Long path support is already enabled.\n"
+				L"Maximum path length: " + std::to_wstring(PathLimitChecker::getMaxPathLength()) + L" characters",
+				L"Already Enabled"
+			);
+			return;
+		}
+
+		if (!PathLimitChecker::getIsRunningAsAdmin())
+		{
+			LockedMessageBox::showError(
+				L"Administrator privileges required to enable long path support.\n"
+				L"Please run the application as administrator with --enable-long-paths flag.",
+				L"Admin Required"
+			);
+			return;
+		}
+
+		if (PathLimitChecker::tryEnableLongPaths())
+		{
+			LockedMessageBox::showInfo(
+				L"Long path support has been enabled successfully!\n\n"
+				L"New maximum path length: " + std::to_wstring(PathLimitChecker::getMaxPathLength()) + L" characters\n"
+				L"The application will now start with long path support.",
+				L"Long Paths Enabled"
+			);
+		}
+		else
+		{
+			LockedMessageBox::showError(
+				L"Failed to enable long path support.\n"
+				L"Please try enabling it manually through Group Policy or Registry Editor.",
+				L"Enable Failed"
+			);
+		}
+	}
+
+	static void showPathInfoConsole() {
+		// For console output (useful for command line usage)
+		std::wcout << L"Path Length Information:\n";
+		std::wcout << L"Current Limit: " << PathLimitChecker::getMaxPathLength() << L" characters\n";
+		std::wcout << L"Long Path Support: " << (PathLimitChecker::isLongPathSupportEnabled() ? L"ENABLED" : L"DISABLED") << L"\n";
+		std::wcout << L"Running as Admin: " << (PathLimitChecker::getIsRunningAsAdmin() ? L"YES" : L"NO") << L"\n";
+
+		if (!PathLimitChecker::isLongPathSupportEnabled())
+		{
+			std::wcout << L"\nTo enable long path support, run with administrator privileges:\n";
+			std::wcout << L"manga_reader.exe --enable-long-paths\n";
+		}
+	}
+
+};
+
 class ArchiveHandler {
 private:
 	struct archive* archive;
@@ -1428,19 +1739,17 @@ private:
 	bool testArchiveCompatibility() {
 		std::string archiveName = UnicodeUtils::wstringToString(archivePathW);
 
-		// Get just the archive filename without path
 		std::filesystem::path archivePath(archiveName);
 		std::string archiveFilename = archivePath.filename().string();
 		std::string archiveDir = archivePath.parent_path().string();
 
-		// Calculate potential path lengths
 		size_t archivePathLength = archiveName.length();
 		size_t basePathLength = archiveDir.length();
 
-		// Conservative limits for Windows compatibility
-		const size_t MAX_TOTAL_PATH = 240;  // Leave buffer for Windows MAX_PATH (260)
-		const size_t MAX_SINGLE_COMPONENT = 80;  // Max length for any single folder/file name
-		const size_t MAX_ESTIMATED_INTERNAL_PATH = 120; // Estimated max internal folder + filename
+		// Dynamic limits based on system configuration
+		const size_t MAX_TOTAL_PATH = PathLimitChecker::getSafePathLength();
+		const size_t MAX_SINGLE_COMPONENT = PathLimitChecker::getMaxComponentLength();
+		const size_t MAX_ESTIMATED_INTERNAL_PATH = 120; // Keep this as estimate
 
 		bool pathTooLong = false;
 		bool componentTooLong = false;
@@ -1459,7 +1768,6 @@ private:
 		}
 
 		// Estimate if internal paths might cause overflow
-		// Base path + archive name + estimated internal folders + filename
 		size_t estimatedMaxPath = basePathLength + archiveFilename.length() + MAX_ESTIMATED_INTERNAL_PATH;
 		if (estimatedMaxPath > MAX_TOTAL_PATH)
 		{
@@ -1470,23 +1778,23 @@ private:
 		{
 			std::wstring message = L"ARCHIVE SKIPPED - PATH LENGTH ISSUE:\n\n";
 			message += L"Archive: " + UnicodeUtils::stringToWstring(archiveFilename) + L"\n\n";
+			message += L"System Path Limit: " + std::to_wstring(PathLimitChecker::getMaxPathLength()) + L" chars\n";
+			message += L"Long Path Support: " + std::wstring(PathLimitChecker::getMaxPathLength() > 260 ? L"ENABLED" : L"DISABLED") + L"\n\n";
 
 			if (pathTooLong)
 			{
-				message += L"• Archive path too long: " + std::to_wstring(archivePathLength) + L" chars (max " + std::to_wstring(MAX_TOTAL_PATH) + L")\n";
+				message += L"• Archive path too long: " + std::to_wstring(archivePathLength) +
+					L" chars (max " + std::to_wstring(MAX_TOTAL_PATH) + L")\n";
 			}
 			if (componentTooLong)
 			{
-				message += L"• Archive filename too long: " + std::to_wstring(archiveFilename.length()) + L" chars (max " + std::to_wstring(MAX_SINGLE_COMPONENT) + L")\n";
+				message += L"• Archive filename too long: " + std::to_wstring(archiveFilename.length()) +
+					L" chars (max " + std::to_wstring(MAX_SINGLE_COMPONENT) + L")\n";
 			}
 			if (estimatedOverflow)
 			{
-				message += L"• Estimated total path would exceed Windows limit\n";
-				message += L"  (Base: " + std::to_wstring(basePathLength) + L" + Archive: " + std::to_wstring(archiveFilename.length()) + L" + Internal: ~" + std::to_wstring(MAX_ESTIMATED_INTERNAL_PATH) + L" = " + std::to_wstring(estimatedMaxPath) + L")\n";
+				message += L"• Estimated total path would exceed limit\n";
 			}
-
-			message += L"\nThis archive will be automatically skipped.\n";
-			message += L"Moving to next archive...";
 
 			LockedMessageBox::showError(message, L"Archive Skipped - Path Too Long");
 			return false;
@@ -2335,10 +2643,22 @@ static constexpr const char* CONFIG_LAST_FOLDER_INDEX = "Settings.lastFolderInde
 static constexpr const char* CONFIG_LAST_IMAGE_INDEX = "Settings.lastImageIndex";
 static constexpr const char* CONFIG_WINDOW_WIDTH = "Settings.windowWidth";
 static constexpr const char* CONFIG_WINDOW_HEIGHT = "Settings.windowHeight";
+static constexpr const char* CONFIG_WINDOW_MAXIMIZED = "Settings.windowMaximized";
+static constexpr const char* CONFIG_WINDOW_FULLSCREEN = "Settings.windowFullscreen";
 static constexpr const char* CONFIG_USE_SMOOTHING = "Settings.useSmoothing";
+
+struct CommandLineOptions {
+	bool enableLongPaths = false;
+	bool showPathInfo = false;
+	bool verbose = false;
+	std::string configFile = "";
+	std::string mangaFolder = "";
+};
 
 class MangaReader {
 private:
+	CommandLineOptions cmdOptions;
+
 	sf::RenderWindow window;
 
 	sf::Texture originalTexture;      // Store original high-res texture
@@ -2405,62 +2725,392 @@ private:
 
 	bool showHelpText;
 
+	bool wasMaximizedOnStart;
+	bool isCurrentlyMaximized;
+	bool isCurrentlyFullscreen;
+	RECT windowedRect;
+	LONG windowedStyle;
+	LONG windowedExStyle;
+
 public: //constructor and destructor
 
-	MangaReader() : window()
-		, originalTexture()
-		, scaledTexture()
-		, currentSprite()
-		, font()
-		, statusText()
-		, helpText()
-		, detailedInfoText()
-		, folders()
-		, currentImages()
-		, currentFolderIndex(0)
-		, currentImageIndex(0)
-		, scrollOffset(0.0f)
-		, zoomLevel(1.0f)
-		, imagePosition()
-		, useSmoothing(true)
-		, lastZoomLevel()
-		, lastWindowSize()
-		, showUI(true)
-		, rootMangaPath()
-		, archiveHandler()
-		, isCurrentlyInArchive()
-		, currentArchivePath()
-		, loadedImages()
-		, loadingMutex()
-		, isLoadingFolder(false)
-		, loadingProgress(0)
-		, folderLoadingFuture()
-		, loadingText()
-		, savedZoomLevel(1.0f)
-		, savedImageOffset()
-		, hasCustomZoom()
-		, hasCustomPosition()
-		, currentView()
-		, sizeMismatchHandler()
-		, navLock()
-		, buttonManager()
-		, config()
-		, showHelpText(true) {
+	explicit MangaReader(const CommandLineOptions& options): cmdOptions(options)
+		 , window()
+		 , originalTexture()
+		 , scaledTexture()
+		 , currentSprite()
+		 , font()
+		 , statusText()
+		 , helpText()
+		 , detailedInfoText()
+		 , folders()
+		 , currentImages()
+		 , currentFolderIndex(0)
+		 , currentImageIndex(0)
+		 , scrollOffset(0.0f)
+		 , zoomLevel(1.0f)
+		 , imagePosition()
+		 , useSmoothing(true)
+		 , lastZoomLevel()
+		 , lastWindowSize()
+		 , showUI(true)
+		 , rootMangaPath()
+		 , archiveHandler()
+		 , isCurrentlyInArchive()
+		 , currentArchivePath()
+		 , loadedImages()
+		 , loadingMutex()
+		 , isLoadingFolder(false)
+		 , loadingProgress(0)
+		 , folderLoadingFuture()
+		 , loadingText()
+		 , savedZoomLevel(1.0f)
+		 , savedImageOffset()
+		 , hasCustomZoom()
+		 , hasCustomPosition()
+		 , currentView()
+		 , sizeMismatchHandler()
+		 , navLock()
+		 , buttonManager()
+		 , config()
+		 , showHelpText(true)
+		 , wasMaximizedOnStart(false)
+		 , isCurrentlyMaximized(false)
+		 , isCurrentlyFullscreen(false)
+		 , windowedRect({ 0, 0, 0, 0 })
+		 , windowedStyle(0)
+		 , windowedExStyle(0)
+	{
+		// Step 1: Create config FIRST (before any validation or window creation)
+		if (!cmdOptions.configFile.empty())
+		{
+			config = std::make_unique<ConfigManager>(
+				UnicodeUtils::stringToWstring(cmdOptions.configFile)
+			);
+		}
+		else
+		{
+			config = std::make_unique<ConfigManager>();
+		}
 
+		// Step 2: Validate command line paths (now we can show errors properly)
+		if (!validateCommandLinePaths())
+		{
+			// Create a minimal window for error display, then exit
+			createMinimalWindow();
+			return;
+		}
 
-		config = std::make_unique<ConfigManager>();
+		// Step 3: Initialize window (now config exists)
+		initializeWindow();
 
-		int savedWidth = config->getInt(CONFIG_WINDOW_WIDTH, 1200);
-		int savedHeight = config->getInt(CONFIG_WINDOW_HEIGHT, 800);
+		// Step 4: Setup UI components
+		setupUI();
 
-		window.create(sf::VideoMode(sf::Vector2u(savedWidth, savedHeight)), "Simple Manga Reader");
-		window.setFramerateLimit(60);
+		loadingText.initialize(*font.get(), 18u);
+		loadingText.get()->setFillColor(sf::Color::White);
 
-		// Get the native window handle and set it for our message box class
+		// Step 5: Initialize with command line manga folder if provided and valid
+		if (!cmdOptions.mangaFolder.empty())
+		{
+			rootMangaPath = UnicodeUtils::stringToWstring(cmdOptions.mangaFolder);
+			initializeWithFolder();
+		}
+		else
+		{
+			initializeConfig();
+		}
+	}
+
+	void initializeWithFolder() {
+		if (rootMangaPath.empty())
+		{
+			// Fallback to normal initialization if path is empty
+			initializeConfig();
+			return;
+		}
+
+		try
+		{
+			if (!std::filesystem::exists(rootMangaPath))
+			{
+				std::wstring errorMsg = L"Manga folder does not exist: " + rootMangaPath +
+					L"\n\nFalling back to folder selection dialog.";
+				LockedMessageBox::showWarning(errorMsg, L"Folder Not Found");
+				initializeConfig();
+				return;
+			}
+
+			if (!std::filesystem::is_directory(rootMangaPath))
+			{
+				std::wstring errorMsg = L"Path is not a directory: " + rootMangaPath +
+					L"\n\nFalling back to folder selection dialog.";
+				LockedMessageBox::showWarning(errorMsg, L"Invalid Directory");
+				initializeConfig();
+				return;
+			}
+
+			loadFolders(rootMangaPath);
+			updateNavigationButtons();
+
+			if (!folders.empty())
+			{
+				currentFolderIndex = 0;
+				loadImagesFromFolder(folders[currentFolderIndex]);
+
+				if (!currentImages.empty())
+				{
+					currentImageIndex = 0;
+					if (loadCurrentImage())
+					{
+						updateWindowTitle();
+						return;
+					}
+				}
+			}
+
+			// If we reach here, the folder exists but has no valid content
+			std::wstring errorMsg = L"No manga content found in: " + rootMangaPath +
+				L"\n\nFalling back to folder selection dialog.";
+			LockedMessageBox::showWarning(errorMsg, L"No Content Found");
+			initializeConfig();
+
+		} catch (const std::filesystem::filesystem_error& e)
+		{
+			std::wstring errorMsg = L"Filesystem error accessing: " + rootMangaPath +
+				L"\nError: " + UnicodeUtils::stringToWstring(e.what()) +
+				L"\n\nFalling back to folder selection dialog.";
+			LockedMessageBox::showWarning(errorMsg, L"Filesystem Error");
+			initializeConfig();
+		} catch (const std::exception& e)
+		{
+			std::wstring errorMsg = L"Error processing manga folder: " + rootMangaPath +
+				L"\nError: " + UnicodeUtils::stringToWstring(e.what()) +
+				L"\n\nFalling back to folder selection dialog.";
+			LockedMessageBox::showWarning(errorMsg, L"Processing Error");
+			initializeConfig();
+		}
+	}
+
+	~MangaReader() {
+		saveCurrentSession();
+
+		//Cleanup COM
+		CoUninitialize();
+	}
+
+	bool validateCommandLinePaths() {
+		bool isValid = true;
+
+		// Validate config file path
+		if (!cmdOptions.configFile.empty())
+		{
+			try
+			{
+				if (!std::filesystem::exists(cmdOptions.configFile))
+				{
+					std::wstring errorMsg = L"Configuration file not found:\n" +
+						UnicodeUtils::stringToWstring(cmdOptions.configFile) +
+						L"\n\nApplication will use default configuration.";
+					LockedMessageBox::showWarning(errorMsg, L"Config File Not Found");
+					// Don't fail for missing config file, just warn
+				}
+				else if (!std::filesystem::is_regular_file(cmdOptions.configFile))
+				{
+					std::wstring errorMsg = L"Configuration path is not a file:\n" +
+						UnicodeUtils::stringToWstring(cmdOptions.configFile) +
+						L"\n\nApplication will use default configuration.";
+					LockedMessageBox::showWarning(errorMsg, L"Invalid Config Path");
+					// Don't fail for invalid config file, just warn
+				}
+			} catch (const std::filesystem::filesystem_error& e)
+			{
+				std::wstring errorMsg = L"Error accessing configuration file:\n" +
+					UnicodeUtils::stringToWstring(cmdOptions.configFile) +
+					L"\nError: " + UnicodeUtils::stringToWstring(e.what()) +
+					L"\n\nApplication will use default configuration.";
+				LockedMessageBox::showWarning(errorMsg, L"Config Access Error");
+				// Don't fail for config access errors, just warn
+			}
+		}
+
+		// Validate manga folder path
+		if (!cmdOptions.mangaFolder.empty())
+		{
+			try
+			{
+				std::filesystem::path mangaPath(cmdOptions.mangaFolder);
+
+				if (!std::filesystem::exists(mangaPath))
+				{
+					std::wstring errorMsg = L"Manga folder not found:\n" +
+						UnicodeUtils::stringToWstring(cmdOptions.mangaFolder) +
+						L"\n\nApplication will start with folder selection dialog.";
+					LockedMessageBox::showWarning(errorMsg, L"Manga Folder Not Found");
+					// Clear the invalid path but don't fail
+					cmdOptions.mangaFolder.clear();
+				}
+				else if (!std::filesystem::is_directory(mangaPath))
+				{
+					std::wstring errorMsg = L"Manga path is not a directory:\n" +
+						UnicodeUtils::stringToWstring(cmdOptions.mangaFolder) +
+						L"\n\nApplication will start with folder selection dialog.";
+					LockedMessageBox::showWarning(errorMsg, L"Invalid Manga Path");
+					// Clear the invalid path but don't fail
+					cmdOptions.mangaFolder.clear();
+				}
+			} catch (const std::filesystem::filesystem_error& e)
+			{
+				std::wstring errorMsg = L"Error accessing manga folder:\n" +
+					UnicodeUtils::stringToWstring(cmdOptions.mangaFolder) +
+					L"\nError: " + UnicodeUtils::stringToWstring(e.what()) +
+					L"\n\nApplication will start with folder selection dialog.";
+				LockedMessageBox::showWarning(errorMsg, L"Manga Folder Access Error");
+				// Clear the invalid path but don't fail
+				cmdOptions.mangaFolder.clear();
+			}
+		}
+
+		return isValid; // Always return true now - we handle errors gracefully
+	}
+
+	void createMinimalWindow() {
+		// Create minimal window just for error display
+		window.create(sf::VideoMode(sf::Vector2u(800, 600)), "Simple Manga Reader - Error");
+
 		HWND hwnd = window.getNativeHandle();
 		LockedMessageBox::setMainWindow(hwnd);
 
-		// Initialize view
+		// Initialize COM for error dialogs
+		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+	}
+
+	void storeWindowedProperties() {
+		HWND hwnd = window.getNativeHandle();
+		if (!hwnd) return;
+
+		// Store current window rectangle and styles
+		GetWindowRect(hwnd, &windowedRect);
+		windowedStyle = GetWindowLongW(hwnd, GWL_STYLE);
+		windowedExStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+	}
+
+	bool getIsFullscreen() const {
+		return isCurrentlyFullscreen;
+	}
+
+	void enterFullscreen() {
+		HWND hwnd = window.getNativeHandle();
+		if (!hwnd || isCurrentlyFullscreen) return;
+
+		// Store current windowed state before going fullscreen
+		if (!isCurrentlyFullscreen)
+		{
+			storeWindowedProperties();
+		}
+
+		// Get monitor info for the window
+		HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+		MONITORINFO monitorInfo = { sizeof(monitorInfo) };
+		GetMonitorInfo(monitor, &monitorInfo);
+
+		// Remove window decorations
+		LONG newStyle = windowedStyle;
+		newStyle &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+		SetWindowLongW(hwnd, GWL_STYLE, newStyle);
+
+		LONG newExStyle = windowedExStyle;
+		newExStyle &= ~(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE);
+		SetWindowLongW(hwnd, GWL_EXSTYLE, newExStyle);
+
+		// Set window to cover entire monitor
+		SetWindowPos(hwnd, HWND_TOP,
+			monitorInfo.rcMonitor.left,
+			monitorInfo.rcMonitor.top,
+			monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left,
+			monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top,
+			SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+		isCurrentlyFullscreen = true;
+		isCurrentlyMaximized = false; // Can't be maximized in fullscreen
+	}
+
+	void exitFullscreen() {
+		HWND hwnd = window.getNativeHandle();
+		if (!hwnd || !isCurrentlyFullscreen) return;
+
+		// Restore original window styles
+		SetWindowLongW(hwnd, GWL_STYLE, windowedStyle);
+		SetWindowLongW(hwnd, GWL_EXSTYLE, windowedExStyle);
+
+		// Restore original window position and size
+		SetWindowPos(hwnd, HWND_NOTOPMOST,
+			windowedRect.left,
+			windowedRect.top,
+			windowedRect.right - windowedRect.left,
+			windowedRect.bottom - windowedRect.top,
+			SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+		// Restore maximized state if it was maximized before
+		if (wasMaximizedOnStart)
+		{
+			ShowWindow(hwnd, SW_MAXIMIZE);
+			isCurrentlyMaximized = true;
+		}
+
+		isCurrentlyFullscreen = false;
+	}
+
+	void toggleFullscreen() {
+		if (isCurrentlyFullscreen)
+		{
+			exitFullscreen();
+		}
+		else
+		{
+			enterFullscreen();
+		}
+
+		// Update view after fullscreen toggle
+		sf::Vector2u newSize = window.getSize();
+		handleWindowResize(newSize);
+	}
+
+	void initializeWindow() {
+
+		int savedWidth = config->getInt(CONFIG_WINDOW_WIDTH, 1200);
+		int savedHeight = config->getInt(CONFIG_WINDOW_HEIGHT, 800);
+		bool savedMaximized = config->getBool(CONFIG_WINDOW_MAXIMIZED, false);
+		bool savedFullscreen = config->getBool(CONFIG_WINDOW_FULLSCREEN, false);
+
+		// Store initial states
+		wasMaximizedOnStart = savedMaximized;
+		isCurrentlyMaximized = savedMaximized;
+		isCurrentlyFullscreen = false; // Always start windowed, then apply fullscreen
+
+		// Create window with saved dimensions
+		window.create(sf::VideoMode(sf::Vector2u(savedWidth, savedHeight)), "Simple Manga Reader");
+		window.setFramerateLimit(60);
+
+		// Get the native window handle
+		HWND hwnd = window.getNativeHandle();
+		LockedMessageBox::setMainWindow(hwnd);
+
+		// Store initial windowed properties
+		storeWindowedProperties();
+
+		// Apply saved states
+		if (savedFullscreen)
+		{
+			enterFullscreen();
+		}
+		else if (savedMaximized)
+		{
+			ShowWindow(hwnd, SW_MAXIMIZE);
+			isCurrentlyMaximized = true;
+		}
+
+		// Initialize view based on current window size
 		sf::Vector2u windowSize = window.getSize();
 		currentView.setSize({ static_cast<float>(windowSize.x), static_cast<float>(windowSize.y) });
 		currentView.setCenter({ static_cast<float>(windowSize.x) / 2.0f, static_cast<float>(windowSize.y) / 2.0f });
@@ -2470,21 +3120,6 @@ public: //constructor and destructor
 		CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
 		SetConsoleOutputCP(CP_UTF8);
 		SetConsoleCP(CP_UTF8);
-
-		setupUI();
-
-		loadingText.initialize(*font.get(), 18u);
-		loadingText.get()->setFillColor(sf::Color::White);
-
-		// Initialize configuration - this handles session restoration OR folder browsing
-		initializeConfig();
-	}
-
-	~MangaReader() {
-		saveCurrentSession();
-
-		//Cleanup COM
-		CoUninitialize();
 	}
 
 	void updateWindowTitle() {
@@ -2728,12 +3363,48 @@ public: //constructor and destructor
 			config->setInt(CONFIG_LAST_IMAGE_INDEX, currentImageIndex);
 
 			// Save window settings
-			sf::Vector2u windowSize = window.getSize();
-			config->setInt(CONFIG_WINDOW_WIDTH, windowSize.x);
-			config->setInt(CONFIG_WINDOW_HEIGHT, windowSize.y);
+			HWND hwnd = window.getNativeHandle();
+			if (hwnd)
+			{
+				// Save fullscreen state
+				config->setBool(CONFIG_WINDOW_FULLSCREEN, isCurrentlyFullscreen);
+
+				if (!isCurrentlyFullscreen)
+				{
+					// Only check maximized state and save dimensions when not fullscreen
+					bool isMaximized = IsZoomed(hwnd) == TRUE;
+					config->setBool(CONFIG_WINDOW_MAXIMIZED, isMaximized);
+
+					if (!isMaximized)
+					{
+						// Only save dimensions if not maximized
+						sf::Vector2u windowSize = window.getSize();
+						config->setInt(CONFIG_WINDOW_WIDTH, windowSize.x);
+						config->setInt(CONFIG_WINDOW_HEIGHT, windowSize.y);
+					}
+				}
+				else
+				{
+					// In fullscreen, save the windowed state
+					config->setBool(CONFIG_WINDOW_MAXIMIZED, wasMaximizedOnStart);
+					if (!wasMaximizedOnStart && windowedRect.right > windowedRect.left)
+					{
+						config->setInt(CONFIG_WINDOW_WIDTH, windowedRect.right - windowedRect.left);
+						config->setInt(CONFIG_WINDOW_HEIGHT, windowedRect.bottom - windowedRect.top);
+					}
+				}
+			}
+			else
+			{
+				// Fallback if no native handle
+				sf::Vector2u windowSize = window.getSize();
+				config->setInt(CONFIG_WINDOW_WIDTH, windowSize.x);
+				config->setInt(CONFIG_WINDOW_HEIGHT, windowSize.y);
+				config->setBool(CONFIG_WINDOW_MAXIMIZED, isCurrentlyMaximized);
+				config->setBool(CONFIG_WINDOW_FULLSCREEN, isCurrentlyFullscreen);
+			}
 
 			config->setBool(CONFIG_USE_SMOOTHING, useSmoothing);
-
 			config->setBool("UI.infoButtonVisible", buttonManager.isButtonToggled(ButtonID::INFO_BUTTON));
 			config->setBool("UI.helpButtonVisible", buttonManager.isButtonToggled(ButtonID::HELP_BUTTON));
 
@@ -3321,14 +3992,22 @@ public://setup
 		// Position help text with 20px margin from bottom
 		float yPosition = static_cast<float>(windowSize.y) - textBounds.size.y - 20.0f;
 
-		// Ensure it doesn't go above the window
-		yPosition = std::max(yPosition, 200.0f);  // Keep at least 200px from top
+		// Ensure it doesn't go above the window (keep at least 200px from top)
+		yPosition = std::max(yPosition, 200.0f);
+
+		// In fullscreen mode, you might want different positioning
+		if (isCurrentlyFullscreen)
+		{
+			// Optional: Different positioning logic for fullscreen
+			// For example, more margin from edges in fullscreen
+			yPosition = static_cast<float>(windowSize.y) - textBounds.size.y - 40.0f;
+			yPosition = std::max(yPosition, 250.0f);
+		}
 
 		helpText.get()->setPosition(sf::Vector2f(10.0f, yPosition));
 	}
 
 	void setupUI() {
-
 		statusText.initialize(*font.get(), 20u);
 		statusText.get()->setFillColor(sf::Color::White);
 		statusText.get()->setPosition(sf::Vector2f(10.0f, 10.0f));
@@ -3348,6 +4027,8 @@ public://setup
 			"H: Toggle help\n"
 			"I: Toggle detailed info\n"
 			"R: Select new manga folder\n"
+			"F10: Toggle maximize (windowed mode)\n"    // NEW
+			"F11: Toggle fullscreen (exclusive mode)\n" // UPDATED
 			"Left Click Info Button: Toggle info\n"
 			"Navigation Buttons: < (prev folder) > (next folder) Info"
 		);
@@ -3357,7 +4038,7 @@ public://setup
 		// Setup detailed info text
 		detailedInfoText.initialize(*font.get(), 14u);
 		detailedInfoText.get()->setFillColor(sf::Color::Cyan);
-		detailedInfoText.get()->setPosition(sf::Vector2f(10.0f, 120.0f)); // Below status text
+		detailedInfoText.get()->setPosition(sf::Vector2f(10.0f, 120.0f));
 
 		// Initialize UI button positions
 		initializeButtons();
@@ -3452,13 +4133,21 @@ public://setup
 		currentView.setCenter({ static_cast<float>(newSize.x) / 2.0f, static_cast<float>(newSize.y) / 2.0f });
 		window.setView(currentView);
 
+		HWND hwnd = window.getNativeHandle();
+		if (hwnd)
+		{
+			bool nowMaximized = IsZoomed(hwnd) == TRUE;
+			if (nowMaximized != isCurrentlyMaximized)
+			{
+				isCurrentlyMaximized = nowMaximized;
+				// Optionally save immediately on state change
+				saveCurrentSession();
+			}
+		}
+
 		// Update all button positions in batch
 		updateAllButtonPositions();
-
 		updateHelpTextPosition();
-
-		// Update help text position
-		helpText.get()->setPosition(sf::Vector2f(10.0f, static_cast<float>(newSize.y) - 180.0f));
 
 		// Refit image with current zoom preferences
 		if (originalTexture.getSize().x > 0)
@@ -3557,10 +4246,20 @@ public: //update funcs
 				" | Smooth: " + (useSmoothing ? "ON" : "OFF")
 				);
 
+			if (isCurrentlyFullscreen)
+			{
+				statusString += " | Fullscreen";
+			}
+			else if (isCurrentlyMaximized)
+			{
+				statusString += " | Maximized";
+			}
+
 			if (isCurrentlyInArchive)
 			{
 				statusString = "[ARCHIVE] " + statusString;
 			}
+
 			statusText.get()->setString(UnicodeUtils::stringToSFString(statusString));
 		}
 	}
@@ -3634,6 +4333,31 @@ public: //update funcs
 
 			detailedInfoText.get()->setString(UnicodeUtils::stringToSFString(detailedString));
 		}
+	}
+
+	bool isWindowMaximized() const {
+		HWND hwnd = window.getNativeHandle();
+		return hwnd ? (IsZoomed(hwnd) == TRUE) : false;
+	}
+
+	void toggleMaximize() {
+		HWND hwnd = window.getNativeHandle();
+		if (!hwnd) return;
+
+		if (isWindowMaximized())
+		{
+			ShowWindow(hwnd, SW_RESTORE);
+			isCurrentlyMaximized = false;
+		}
+		else
+		{
+			ShowWindow(hwnd, SW_MAXIMIZE);
+			isCurrentlyMaximized = true;
+		}
+	}
+
+	bool getIsMaximized() const {
+		return isCurrentlyMaximized;
 	}
 
 public: //navigations and inputs
@@ -4032,6 +4756,17 @@ public: //navigations and inputs
 				case sf::Keyboard::Key::Q:
 					if (navLock.isNavigationAllowed()) toggleSmoothing();
 					break;
+				case sf::Keyboard::Key::F11:
+					toggleFullscreen();  // Changed from toggleMaximize()
+					saveCurrentSession(); // Save state change
+					break;
+				case sf::Keyboard::Key::F10:
+					if (!isCurrentlyFullscreen)
+					{ // Only allow maximize when not fullscreen
+						toggleMaximize();
+						saveCurrentSession();
+					}
+					break;
 				}
 			},
 			[&](const sf::Event::MouseWheelScrolled& mwhl) {
@@ -4230,6 +4965,10 @@ public: //rendering
 
 public: //main aplication function
 
+	bool isInitialized() const {
+		return window.isOpen();
+	}
+
 	std::wstring browseForFolder() {
 		BROWSEINFOW bi = {};
 		wchar_t path[MAX_PATH];
@@ -4262,17 +5001,130 @@ public: //main aplication function
 
 };
 
+CommandLineOptions parseCommandLine(int argc, char* argv[]) {
+	CLI::App app{ "Simple Manga Reader - A manga/comic archive viewer" };
+	app.set_version_flag("--version,-v", "1.0.0");
+
+	CommandLineOptions options;
+
+	// Path-related options
+	app.add_flag("--enable-long-paths", options.enableLongPaths,
+		"Attempt to enable Windows long path support (requires admin)");
+
+	app.add_flag("--show-path-info", options.showPathInfo,
+		"Display current path length settings and exit");
+
+	// Configuration options
+	app.add_option("--config,-c", options.configFile,
+		"Specify custom configuration file path")
+		->check(CLI::ExistingFile);
+
+	app.add_option("--manga-folder,-m", options.mangaFolder,
+		"Start with specific manga folder")
+		->check(CLI::ExistingDirectory);
+
+	// Debug options
+	app.add_flag("--verbose", options.verbose,
+		"Enable verbose logging output");
+
+	try
+	{
+		app.parse(argc, argv);
+	} catch (const CLI::ParseError& e)
+	{
+		// CLI11 handles help and error messages automatically
+		std::exit(app.exit(e));
+	}
+
+	return options;
+}
+
+std::vector<std::string> parseWindowsCommandLine(LPSTR lpCmdLine) {
+	std::vector<std::string> args;
+
+	// Add program name as argv[0]
+	wchar_t exePath[MAX_PATH];
+	GetModuleFileNameW(NULL, exePath, MAX_PATH);
+	args.push_back(UnicodeUtils::wstringToString(std::wstring(exePath)));
+
+	// Parse command line arguments
+	if (lpCmdLine && strlen(lpCmdLine) > 0)
+	{
+		std::string cmdLine(lpCmdLine);
+		std::istringstream iss(cmdLine);
+		std::string arg;
+
+		// Simple space-separated parsing (CLI11 can handle more complex cases)
+		while (iss >> arg)
+		{
+			args.push_back(arg);
+		}
+	}
+
+	return args;
+}
+
+// Convert vector<string> to char* argv[] for CLI11
+std::vector<char*> convertToArgv(const std::vector<std::string>& args) {
+	std::vector<char*> argv;
+	argv.reserve(args.size());
+
+	for (const auto& arg : args)
+	{
+		argv.push_back(const_cast<char*>(arg.c_str()));
+	}
+
+	return argv;
+}
+
 // Windows entry point for GUI application (no console window)
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
 	try
 	{
-		MangaReader reader;
+		// Parse command line arguments
+		auto argStrings = parseWindowsCommandLine(lpCmdLine);
+		auto argv = convertToArgv(argStrings);
+		int argc = static_cast<int>(argv.size());
+
+		CommandLineOptions options = parseCommandLine(argc, argv.data());
+
+		// Handle command line options before starting GUI
+		if (options.showPathInfo)
+		{
+			PathLimitChecker::showPathInfoConsole();
+			return 0;
+		}
+
+		if (options.enableLongPaths)
+		{
+			PathLimitChecker::handleEnableLongPaths();
+			// Continue to start application after attempting to enable
+		}
+
+		// Create reader with validation
+		MangaReader reader(options);
+
+		// Check if reader was initialized successfully
+		if (!reader.isInitialized())
+		{
+			return 1; // Exit gracefully if initialization failed
+		}
+
 		reader.run();
+
+	} catch (const CLI::ParseError& e)
+	{
+		// CLI11 parsing error - this is expected for --help, etc.
+		return 1;
 	} catch (const std::exception& e)
 	{
 		// Show error in message box (no console in Windows app)
-		std::wstring errorMsg = L"Error: " + UnicodeUtils::stringToWstring(e.what());
+		std::wstring errorMsg = L"Application Error: " + UnicodeUtils::stringToWstring(e.what());
 		LockedMessageBox::showError(errorMsg, L"Manga Reader Error");
+		return 1;
+	} catch (...)
+	{
+		LockedMessageBox::showError(L"Unknown error occurred during startup.", L"Manga Reader Error");
 		return 1;
 	}
 
