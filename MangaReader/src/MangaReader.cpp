@@ -18,6 +18,7 @@
 #include <fstream>
 #include <map>
 #include <shared_mutex>
+#include <psapi.h>
 
 // Define SFML_STATIC if not already defined (for static linking)
 #ifndef SFML_STATIC
@@ -2354,6 +2355,7 @@ enum class ButtonID {
 	NEXT_FOLDER,
 	SETTINGS_BUTTON,
 	HELP_BUTTON,
+	DELETE_BUTTON,
 	COUNT
 };
 
@@ -2660,7 +2662,6 @@ static constexpr const char* CONFIG_SHOW_SESSION_SUCCESS = "Settings.showSession
 struct CommandLineOptions {
 	bool enableLongPaths = false;
 	bool showPathInfo = false;
-	bool verbose = false;
 	std::string configFile = "";
 	std::string mangaFolder = "";
 };
@@ -2742,7 +2743,270 @@ private:
 	LONG windowedStyle;
 	LONG windowedExStyle;
 
+	sf::RectangleShape memoryWarningBg;
+	sf_text_wrapper memoryWarningText;
+	sf_text_wrapper memoryHoverText;
+	bool showMemoryWarning;
+	bool memoryWarningHovered;
+	sf::Vector2f memoryWarningPosition;
+	float memoryWarningSize;
+
 public: //constructor and destructor
+
+	struct AppMemoryInfo {
+		size_t workingSetMB;        // Physical memory currently used by app
+		size_t privateBytesMB;      // Private memory allocated by app
+		size_t virtualSizeMB;       // Virtual memory used by app
+		size_t peakWorkingSetMB;    // Peak physical memory usage
+		bool isHighUsage;           // > 2GB working set
+		std::string warningReason;
+	};
+
+	AppMemoryInfo getCurrentAppMemoryInfo() {
+		AppMemoryInfo info = {};
+
+		HANDLE hProcess = GetCurrentProcess();
+		PROCESS_MEMORY_COUNTERS_EX pmc;
+
+		if (GetProcessMemoryInfo(hProcess, (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc)))
+		{
+			info.workingSetMB = static_cast<size_t>(pmc.WorkingSetSize / (1024 * 1024));
+			info.privateBytesMB = static_cast<size_t>(pmc.PrivateUsage / (1024 * 1024));
+			info.virtualSizeMB = static_cast<size_t>(pmc.PagefileUsage / (1024 * 1024));
+			info.peakWorkingSetMB = static_cast<size_t>(pmc.PeakWorkingSetSize / (1024 * 1024));
+
+			// Show warning if app is using more than 2GB of physical memory
+			if (info.workingSetMB > 2048)
+			{
+				info.isHighUsage = true;
+				info.warningReason = "Application using > 2GB RAM";
+			}
+			// Also warn if private memory is very high (indicates memory leaks)
+			else if (info.privateBytesMB > 2048)
+			{
+				info.isHighUsage = true;
+				info.warningReason = "High private memory usage";
+			}
+			// Warn if approaching typical 32-bit app limits (even on 64-bit)
+			else if (info.virtualSizeMB > 1536)
+			{ // 1.5GB virtual memory
+				info.isHighUsage = true;
+				info.warningReason = "High virtual memory usage";
+			}
+			else
+			{
+				info.isHighUsage = false;
+			}
+		}
+
+		return info;
+	}
+
+	void initializeMemoryWarning() {
+		memoryWarningSize = 25.0f;
+		showMemoryWarning = false;
+		memoryWarningHovered = false;
+
+		// Setup warning background (triangle shape using rectangle)
+		memoryWarningBg.setSize(sf::Vector2f(memoryWarningSize, memoryWarningSize));
+		memoryWarningBg.setFillColor(sf::Color(255, 165, 0, 200)); // Orange
+		memoryWarningBg.setOutlineThickness(1);
+		memoryWarningBg.setOutlineColor(sf::Color(255, 255, 255));
+
+		// Setup warning text (!)
+		memoryWarningText.initialize(*font.get(), 16);
+		memoryWarningText.get()->setString("!");
+		memoryWarningText.get()->setFillColor(sf::Color::White);
+		memoryWarningText.get()->setStyle(sf::Text::Bold);
+
+		// Setup hover text
+		memoryHoverText.initialize(*font.get(), 12);
+		memoryHoverText.get()->setFillColor(sf::Color::White);
+
+		updateMemoryWarningPosition();
+	}
+
+	void updateMemoryWarningPosition() {
+		// Position below the rightmost button (INFO_BUTTON)
+		float buttonY = 10.0f;
+		float buttonSize = 30.0f;
+		float infoButtonX = static_cast<float>(window.getSize().x) - 50.0f;
+
+		memoryWarningPosition.x = infoButtonX + (buttonSize - memoryWarningSize) / 2.0f;
+		memoryWarningPosition.y = buttonY + buttonSize + 10.0f; // 10px gap below buttons
+
+		memoryWarningBg.setPosition(memoryWarningPosition);
+
+		// Center the "!" in the warning box
+		sf::FloatRect textBounds = memoryWarningText.get()->getLocalBounds();
+		memoryWarningText.get()->setPosition(sf::Vector2f(
+			memoryWarningPosition.x + (memoryWarningSize - textBounds.size.x) / 2.0f - textBounds.position.x,
+			memoryWarningPosition.y + (memoryWarningSize - textBounds.size.y) / 2.0f - textBounds.position.y
+		));
+	}
+
+	void updateMemoryWarning() {
+		AppMemoryInfo memInfo = getCurrentAppMemoryInfo();
+		showMemoryWarning = memInfo.isHighUsage;
+
+		if (showMemoryWarning)
+		{
+			// Update hover text with current application memory info
+			std::string hoverMessage =
+				std::string("HIGH APPLICATION MEMORY WARNING\n") +
+				"Reason: " + memInfo.warningReason + "\n\n" +
+				"MANGA READER MEMORY USAGE:\n" +
+				"Physical Memory: " + std::to_string(memInfo.workingSetMB) + " MB\n" +
+				"Private Memory: " + std::to_string(memInfo.privateBytesMB) + " MB\n" +
+				"Virtual Memory: " + std::to_string(memInfo.virtualSizeMB) + " MB\n" +
+				"Peak Usage: " + std::to_string(memInfo.peakWorkingSetMB) + " MB\n\n" +
+				"RECOMMENDATIONS:\n" +
+				"- Switch to smaller images/folders\n" +
+				"- Use lower zoom levels\n" +
+				"- Close and restart application\n" +
+				"- Clear image cache (Tab to switch folders)";
+
+			memoryHoverText.get()->setString(UnicodeUtils::stringToSFString(hoverMessage));
+		}
+	}
+
+	bool isMouseOverMemoryWarning(sf::Vector2f mousePos) {
+		if (!showMemoryWarning) return false;
+
+		sf::FloatRect warningBounds = memoryWarningBg.getGlobalBounds();
+		// Add a small buffer for easier hovering
+		warningBounds.position.x -= 5.0f;
+		warningBounds.position.y -= 5.0f;
+		warningBounds.size.x += 10.0f;
+		warningBounds.size.y += 10.0f;
+
+		return warningBounds.contains(mousePos);
+	}
+
+	bool deleteCurrentFolderToRecycleBin() {
+		if (folders.empty() || currentFolderIndex < 0 || currentFolderIndex >= folders.size())
+		{
+			return false;
+		}
+
+		std::wstring currentPath = folders[currentFolderIndex].dir;
+		bool isArchive = folders[currentFolderIndex].isArchieve;
+
+		// Confirm deletion
+		std::wstring confirmMsg = L"DELETE TO RECYCLE BIN\n\n";
+		confirmMsg += L"Are you sure you want to delete:\n";
+		confirmMsg += (isArchive ? L"Archive: " : L"Folder: ");
+
+		std::filesystem::path pathObj(currentPath);
+		std::wstring displayName = pathObj.filename().wstring();
+		if (displayName.empty())
+		{
+			displayName = pathObj.parent_path().filename().wstring();
+		}
+
+		confirmMsg += displayName + L"\n\n";
+		confirmMsg += L"This will move it to the Recycle Bin.\n";
+		confirmMsg += L"You can restore it later if needed.\n\n";
+		confirmMsg += L"YES - Delete to Recycle Bin\n";
+		confirmMsg += L"NO - Cancel";
+
+		int result = LockedMessageBox::showQuestion(confirmMsg, L"Confirm Deletion");
+
+		if (result != IDYES)
+		{
+			return false;
+		}
+
+		// Close archive if it's currently open
+		if (isCurrentlyInArchive && archiveHandler.getIsArchiveOpen())
+		{
+			archiveHandler.closeArchive();
+			isCurrentlyInArchive = false;
+			currentArchivePath = L"";
+		}
+
+		// Prepare for SHFileOperation
+		std::wstring pathWithNull = currentPath + L'\0';
+
+		SHFILEOPSTRUCTW fileOp = {};
+		fileOp.wFunc = FO_DELETE;
+		fileOp.pFrom = pathWithNull.c_str();
+		fileOp.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT;
+
+		int deleteResult = SHFileOperationW(&fileOp);
+
+		if (deleteResult != 0 || fileOp.fAnyOperationsAborted)
+		{
+			std::wstring errorMsg = L"Failed to delete to Recycle Bin.\n\n";
+			errorMsg += L"Error code: " + std::to_wstring(deleteResult) + L"\n";
+			errorMsg += L"The item may be in use or you may not have sufficient permissions.";
+			LockedMessageBox::showError(errorMsg, L"Delete Failed");
+			return false;
+		}
+
+		// Remove from folders list
+		folders.erase(folders.begin() + currentFolderIndex);
+		currentImages.clear();
+
+		// Navigate to next available folder
+		if (folders.empty())
+		{
+			LockedMessageBox::showInfo(L"No more folders available. Please select a new manga folder.", L"No Folders");
+			selectNewMangaFolder();
+			return true;
+		}
+
+		// Adjust index if we deleted the last folder
+		if (currentFolderIndex >= folders.size())
+		{
+			currentFolderIndex = folders.size() - 1;
+		}
+
+		// Try to load the next folder
+		if (!tryLoadValidFolder())
+		{
+			LockedMessageBox::showWarning(L"No valid folders remaining. Please select a new manga folder.", L"No Valid Folders");
+			selectNewMangaFolder();
+		}
+
+		updateNavigationButtons();
+		updateWindowTitle();
+
+		LockedMessageBox::showInfo(L"Folder moved to Recycle Bin successfully.", L"Deletion Complete");
+		return true;
+	}
+
+	bool tryLoadValidFolder() {
+		if (folders.empty()) return false;
+
+		int attempts = 0;
+		int startIndex = currentFolderIndex;
+
+		do
+		{
+			try
+			{
+				loadImagesFromFolder(folders[currentFolderIndex]);
+				if (!currentImages.empty())
+				{
+					currentImageIndex = 0;
+					if (loadCurrentImage())
+					{
+						return true;
+					}
+				}
+			} catch (...)
+			{
+				// Skip invalid folder
+			}
+
+			currentFolderIndex = (currentFolderIndex + 1) % folders.size();
+			attempts++;
+
+		} while (attempts < folders.size() && currentFolderIndex != startIndex);
+
+		return false;
+	}
 
 	explicit MangaReader(const CommandLineOptions& options): cmdOptions(options)
 		 , window()
@@ -3219,6 +3483,13 @@ public: //constructor and destructor
 		settingsConfig.hasCircularBg = true;
 		settingsConfig.fontSize = 18;
 
+		UIButton::ButtonConfig deleteConfig;
+		deleteConfig.text = "X";
+		deleteConfig.backgroundColor = sf::Color(180, 50, 50, 200);  // Red background
+		deleteConfig.textColor = sf::Color(180, 50, 50);
+		deleteConfig.hasCircularBg = true;
+		deleteConfig.fontSize = 18;
+
 		// Calculate initial positions
 		float buttonY = 10.0f;
 		float buttonSize = 30.0f;
@@ -3229,8 +3500,9 @@ public: //constructor and destructor
 		buttonManager.addButton(*font.get(), ButtonID::INFO_BUTTON, infoButtonX, buttonY, infoConfig, buttonSize);
 		buttonManager.addButton(*font.get(), ButtonID::NEXT_FOLDER, infoButtonX - spacing, buttonY, nextConfig, buttonSize);
 		buttonManager.addButton(*font.get(), ButtonID::PREVIOUS_FOLDER, infoButtonX - (spacing * 2), buttonY, prevConfig, buttonSize);
-		buttonManager.addButton(*font.get(), ButtonID::HELP_BUTTON, infoButtonX - (spacing * 3), buttonY, helpConfig, buttonSize);
-		buttonManager.addButton(*font.get(), ButtonID::SETTINGS_BUTTON, infoButtonX - (spacing * 4), buttonY, settingsConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::DELETE_BUTTON, infoButtonX - (spacing * 3), buttonY, deleteConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::HELP_BUTTON, infoButtonX - (spacing * 4), buttonY, helpConfig, buttonSize);
+		buttonManager.addButton(*font.get(), ButtonID::SETTINGS_BUTTON, infoButtonX - (spacing * 5), buttonY, settingsConfig, buttonSize);
 
 		// Set up info button as toggleable
 		buttonManager.getButton(ButtonID::INFO_BUTTON)->setToggleState(true, false);
@@ -3513,8 +3785,10 @@ public: //constructor and destructor
 			switch (id)
 			{
 			case ButtonID::SETTINGS_BUTTON:
-				return sf::Vector2f(infoButtonX - (spacing * 4), buttonY);
+				return sf::Vector2f(infoButtonX - (spacing * 5), buttonY);
 			case ButtonID::HELP_BUTTON:
+				return sf::Vector2f(infoButtonX - (spacing * 4), buttonY);
+			case ButtonID::DELETE_BUTTON:
 				return sf::Vector2f(infoButtonX - (spacing * 3), buttonY);
 			case ButtonID::INFO_BUTTON:
 				return sf::Vector2f(infoButtonX, buttonY);
@@ -3528,6 +3802,9 @@ public: //constructor and destructor
 			});
 
 		updateNavigationButtons();
+
+		// Update memory warning position when buttons move
+		updateMemoryWarningPosition();
 	}
 
 	void handleButtonClick(ButtonID clickedButton) {
@@ -3542,6 +3819,14 @@ public: //constructor and destructor
 			buttonManager.toggleButton(ButtonID::HELP_BUTTON);
 			showHelpText = buttonManager.isButtonToggled(ButtonID::HELP_BUTTON);
 			saveCurrentSession();
+			break;
+
+		case ButtonID::DELETE_BUTTON:
+			if (navLock.isNavigationAllowed())
+			{
+				deleteCurrentFolderToRecycleBin();
+				saveCurrentSession(); // Save after deletion
+			}
 			break;
 
 		case ButtonID::PREVIOUS_FOLDER:
@@ -4354,6 +4639,7 @@ public://setup
 			"Middle Click: Reset zoom\n"
 			"Arrow Keys/WASD: Pan image\n"
 			"Tab: Toggle folder\n"
+			"Delete: Delete current folder to Recycle Bin\n"
 			"F: Fit to window\n"
 			"C: Center image (keep zoom)\n"
 			"H: Toggle help\n"
@@ -4374,6 +4660,9 @@ public://setup
 
 		// Initialize UI button positions
 		initializeButtons();
+
+		// Initialize memory warning system
+		initializeMemoryWarning();
 	}
 
 	void handleZoom(float zoomDelta) {
@@ -5063,7 +5352,11 @@ public: //navigations and inputs
 					if (navLock.isNavigationAllowed()) handleScroll(sf::Vector2f(50, 0));
 					break;
 				case sf::Keyboard::Key::Tab:
-					nextFolder(); // nextFolder checks navLock internally
+					if (!sf::Keyboard::isKeyPressed(sf::Keyboard::Key::LAlt) &&
+						!sf::Keyboard::isKeyPressed(sf::Keyboard::Key::RAlt))
+					{
+						nextFolder(); // nextFolder checks navLock internally
+					}
 					break;
 				case sf::Keyboard::Key::F:
 					if (navLock.isNavigationAllowed()) fitToWindow(true);
@@ -5098,6 +5391,9 @@ public: //navigations and inputs
 						toggleMaximize();
 						saveCurrentSession();
 					}
+					break;
+				case sf::Keyboard::Key::Delete:
+					if (navLock.isNavigationAllowed()) deleteCurrentFolderToRecycleBin();
 					break;
 				}
 			},
@@ -5143,6 +5439,13 @@ public: //navigations and inputs
 						handleButtonClick(clickedButton);
 					}
 				}
+			},
+			[&](const sf::Event::MouseMoved& mm) {
+				if (LockedMessageBox::isActive()) return;
+
+				// Check if mouse is over memory warning for hover effect
+				sf::Vector2f mousePos = window.mapPixelToCoords(sf::Vector2i(mm.position.x, mm.position.y));
+				memoryWarningHovered = isMouseOverMemoryWarning(mousePos);
 			},
 			[&](const sf::Event::MouseButtonReleased& mb) {
 				if (LockedMessageBox::isActive()) return;
@@ -5196,6 +5499,9 @@ public: //rendering
 	void render() {
 		window.clear(sf::Color::Black);
 
+		// Update memory warning status
+		updateMemoryWarning();
+
 		// Draw current image
 		if (currentSprite.get()->getTexture().getSize().x > 0)
 		{
@@ -5245,6 +5551,44 @@ public: //rendering
 				window.draw(helpBg);
 
 				window.draw(*helpText.get());
+			}
+
+			// Draw memory warning if needed
+			if (showMemoryWarning)
+			{
+				// Make warning more visible if hovered
+				sf::Color bgColor = memoryWarningHovered ?
+					sf::Color(255, 100, 0, 240) :  // Brighter orange when hovered
+					sf::Color(255, 165, 0, 200);   // Normal orange
+
+				memoryWarningBg.setFillColor(bgColor);
+				window.draw(memoryWarningBg);
+				window.draw(*memoryWarningText.get());
+
+				// Show hover text if mouse is over warning
+				if (memoryWarningHovered)
+				{
+					sf::FloatRect hoverBounds = memoryHoverText.get()->getLocalBounds();
+					sf::RectangleShape hoverBg;
+					hoverBg.setSize({ hoverBounds.size.x + 20.f, hoverBounds.size.y + 20.f });
+
+					// Position hover text to the left of the warning to avoid going off screen
+					float hoverX = memoryWarningPosition.x - hoverBounds.size.x - 30.0f;
+					if (hoverX < 10.0f)
+					{
+						hoverX = memoryWarningPosition.x + memoryWarningSize + 10.0f; // Show on right if no space on left
+					}
+
+					hoverBg.setPosition(sf::Vector2f(hoverX, memoryWarningPosition.y - 10.0f));
+					hoverBg.setFillColor(sf::Color(0, 0, 0, 220));
+					hoverBg.setOutlineThickness(2);
+					hoverBg.setOutlineColor(sf::Color(255, 165, 0));
+					window.draw(hoverBg);
+
+					memoryHoverText.get()->setPosition(sf::Vector2f(hoverBg.getPosition().x + 10.f,
+						hoverBg.getPosition().y + 10.f));
+					window.draw(*memoryHoverText.get());
+				}
 			}
 		}
 
@@ -5354,10 +5698,6 @@ CommandLineOptions parseCommandLine(int argc, char* argv[]) {
 	app.add_option("--manga-folder,-m", options.mangaFolder,
 		"Start with specific manga folder")
 		->check(CLI::ExistingDirectory);
-
-	// Debug options
-	app.add_flag("--verbose", options.verbose,
-		"Enable verbose logging output");
 
 	try
 	{
